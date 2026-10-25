@@ -68,6 +68,7 @@ static void init(struct sim*s){ memset(s,0,sizeof(*s));s->cx=PG_GDSC_PWR_ON;s->h
 static enum pg_result run(struct sim*s,uint32_t*fw){uint32_t saved[PG_WORDS];struct pg_io io={s,rd,wr,wait_us,report};return pg_tcm_test(&io,fw,saved);}
 static void restored(struct sim*s){check(memcmp(s->tcm,s->original,sizeof(s->tcm))==0,"original TCM lost");check(s->cfg==0x8602 && s->cxo==(PG_CLK_OFF|2) && s->gmu==(PG_CLK_OFF|2) && s->retention==0,"state not restored");}
 int main(void){struct sim s;uint32_t fw[PG_WORDS];for(unsigned i=0;i<PG_WORDS;i++)fw[i]=i^0xa5a5a5a5u;fw[0]=0x43f80;fw[1]=9;
+ (void)pg_cx_cycle; /* separately exercised by test_polaris_cx_power.py */
  /* Actual read-only helper used by mode 2. Literal register values keep
   * the simulated GDSCR semantics independent from the driver's masks. */
  const uint32_t cx_off[]={0x00222001u,0u,0x80000001u};

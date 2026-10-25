@@ -1,9 +1,10 @@
 --- /dev/null
 +++ b/bsd/dev/polaris_gmu_tcm_test.c
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,153 @@
 +/* Optional Polaris A630 GMU ITCM test. CPU scanout and FT8716 stay active.
 + * polarisgmutest=1: GCC AON; =2: read-only CX status.
-+ * Mode 3 TCM code is gated off; no firmware start or GPU acceleration.
++ * =4: bounded local CX GDSC cycle; mode 3 TCM remains gated off.
++ * No firmware start or GPU acceleration.
 + */
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
 +#include <sys/param.h>
@@ -122,6 +123,12 @@
 +        (void)pg_cx_status(&io);
 +        goto done;
 +    }
++    if (pg_mode == 4) {
++        enum pg_cx_result cx_result = pg_cx_cycle(&io);
++        printf("POLARIS GMUTEST: CX cycle result=%u (0=on-and-restored, 1=AHB-off, 2=busy, 3=no-power-ACK, 4=restore-failed, 5=held-on, 6=vote-restored-still-on)\n",
++               (unsigned int)cx_result);
++        goto done;
++    }
 +    if (pg_mode != 3) goto done;
 +    /* Mapping alone does not read GMU; the core gates each MMIO by power/clock state. */
 +    maps.gmu = ml_io_map(0x0506a000, 0x30000);
@@ -140,7 +147,7 @@
 +    thread_t thread;
 +    if (pg_started || !polaris_touch_i2c_board()) return;
 +    (void)PE_parse_boot_argn("polarisgmutest", &pg_mode, sizeof(pg_mode));
-+    if (pg_mode != 1 && pg_mode != 2) return;
++    if (pg_mode != 1 && pg_mode != 2 && pg_mode != 4) return;
 +    pg_started = true;
 +    if (kernel_thread_start(pg_thread, NULL, &thread) == KERN_SUCCESS)
 +        thread_deallocate(thread);
@@ -149,10 +156,11 @@
 +#endif
 --- /dev/null
 +++ b/bsd/dev/polaris_gmu_tcm_test.h
-@@ -0,0 +1,211 @@
+@@ -0,0 +1,291 @@
 +/* Polaris GMU ITCM experiment, shared with host fault-injection tests.
 + * Register facts: MiCode c7cb50c18f81 gpucc-sdm845.c/adreno_a6xx.c.
-+ * Does not vote rails, release CM3 reset, touch SMMU, or submit GPU work.
++ * Mode 4 may cycle only the local CX GDSC. Does not vote shared rails,
++ * release CM3 reset, touch SMMU, or submit GPU work.
 + */
 +#ifndef POLARIS_GMU_TCM_TEST_H
 +#define POLARIS_GMU_TCM_TEST_H
@@ -173,6 +181,9 @@
 +#define PG_CLK_OFF (1u << 31) /* CBCR halt status: 1 = clock off. */
 +#define PG_GDSC_PWR_ON (1u << 31) /* GDSCR status: 1 = domain on. */
 +#define PG_SW_COLLAPSE 1u
++#define PG_GDSC_HW_CONTROL (1u << 1)
++#define PG_CX_TIMEOUT_US 500u /* live DT qcom,gds-timeout */
++#define PG_CX_DISABLE_US 100u /* vendor no-status-check-on-disable delay */
 +#define PG_DRAM_BASE 0x100000000ULL
 +#define PG_DRAM_SIZE6 0x7cc00000ULL
 +#define PG_DRAM_SIZE8 0xfcc00000ULL
@@ -219,6 +230,82 @@
 +    pg_report(io, "GMU RCG", pg_read(io, PG_GPUCC, PG_RCG),
 +              pg_read(io, PG_GPUCC, PG_RCG + 4));
 +    return true;
++}
++enum pg_cx_result {
++    PG_CX_RESTORED, PG_CX_AHB_OFF, PG_CX_BUSY, PG_CX_NO_ACK,
++    PG_CX_RESTORE_FAILED, PG_CX_HELD_ON, PG_CX_VOTE_RESTORED_ON
++};
++static enum pg_cx_result pg_cx_cycle(struct pg_io *io)
++{
++    uint32_t before, now, hw = 0, clock;
++    bool powered = false;
++    /* MiCode gdsc-regulator.c: enable 194-354, disable 357-437.
++     * DT: CX has no root-clock/reset sequence, has HW status at +0x1540,
++     * 500us timeout and no-status-check-on-disable. Shared parent votes
++     * remain untouched: this tests inherited supplies, not their voltage.
++     */
++    if (pg_read(io, PG_GCC, PG_GCC_AHB) & PG_CLK_OFF)
++        return PG_CX_AHB_OFF;
++    before = pg_read(io, PG_GPUCC, PG_CX_GDSCR);
++    pg_report(io, "CX cycle before", before, 0);
++    /* Only acquire an off, software-collapsed domain, never an inherited
++     * on domain or one managed by hardware/another vote.
++     */
++    if ((before & (PG_GDSC_PWR_ON | PG_GDSC_HW_CONTROL)) ||
++        !(before & PG_SW_COLLAPSE)) return PG_CX_BUSY;
++    pg_write(io, PG_GPUCC, PG_CX_GDSCR, before & ~PG_SW_COLLAPSE);
++    io->wait_us(io->ctx, 1); /* >=8 XO cycles before status polling */
++    now = pg_read(io, PG_GPUCC, PG_CX_GDSCR);
++    if (now == 0xffffffffu || (now & PG_GDSC_HW_CONTROL))
++        return PG_CX_HELD_ON;
++    if (!(now & PG_SW_COLLAPSE)) {
++        for (unsigned int us = 0; us < PG_CX_TIMEOUT_US; ++us) {
++            /* This is the GPUCC status alias, not GMU MMIO. */
++            hw = pg_read(io, PG_GPUCC, PG_CX_HW);
++            if (hw == 0xffffffffu) break;
++            if (hw & PG_GDSC_PWR_ON) {
++                now = pg_read(io, PG_GPUCC, PG_CX_GDSCR);
++                powered = pg_cx_on(now);
++                break;
++            }
++            io->wait_us(io->ctx, 1);
++        }
++    }
++    pg_report(io, "CX cycle power ACK", now, hw);
++    if (hw == 0xffffffffu || ((hw & PG_GDSC_PWR_ON) && !powered))
++        return PG_CX_HELD_ON;
++    if (powered) {
++        /* Never collapse a newly visible domain with an active/requested
++         * GMU clock. No firmware/reset/clock write is part of this test.
++         */
++        clock = pg_read(io, PG_GPUCC, PG_GMU_CLK);
++        pg_report(io, "CX cycle GMU clock", clock, 0);
++        if (clock == 0xffffffffu || (clock & 1u) || !(clock & PG_CLK_OFF))
++            return PG_CX_HELD_ON;
++        io->wait_us(io->ctx, 2); /* vendor staggered memory power-up delay */
++    }
++    now = pg_read(io, PG_GPUCC, PG_CX_GDSCR);
++    if (now == 0xffffffffu || (now & PG_GDSC_HW_CONTROL))
++        return PG_CX_HELD_ON;
++    if ((now & PG_GDSC_PWR_ON) && !powered) return PG_CX_HELD_ON;
++    /* Restore only our collapse request, preserving all other fields.
++     * PWR_ON is read-only, not a saved control value to replay.
++     */
++    pg_write(io, PG_GPUCC, PG_CX_GDSCR,
++             (now & ~PG_GDSC_PWR_ON) | PG_SW_COLLAPSE);
++    io->wait_us(io->ctx, PG_CX_DISABLE_US);
++    now = pg_read(io, PG_GPUCC, PG_CX_GDSCR);
++    pg_report(io, "CX cycle restored request", before, now);
++    if (now == 0xffffffffu || !(now & PG_SW_COLLAPSE))
++        return PG_CX_RESTORE_FAILED;
++    /* DT omits a disable ACK requirement: another TZ/HYP vote may hold
++     * the domain on. Observe it without forcing off or changing rails.
++     */
++    hw = pg_read(io, PG_GPUCC, PG_CX_HW);
++    pg_report(io, "CX cycle final HW status", hw, 0);
++    if (hw == 0xffffffffu) return PG_CX_RESTORE_FAILED;
++    if ((now | hw) & PG_GDSC_PWR_ON) return PG_CX_VOTE_RESTORED_ON;
++    return powered ? PG_CX_RESTORED : PG_CX_NO_ACK;
 +}
 +static bool pg_poll(struct pg_io *io, enum pg_block b, uint32_t o,
 +                    uint32_t mask, uint32_t expected)

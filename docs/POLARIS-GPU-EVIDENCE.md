@@ -105,3 +105,21 @@ mode 3 的 TCM 核心虽存在，启动入口仍将其挡住；不能按旧注�
 
 下一步设计有来源、可撤销的 CX/MX/RPMh 与 GDSC 上电操作，并在下一次内核构建中包含上述修正。
 GMU/HFI、PAS13、隔离映射、CP 写回/fence 和 Mesa 呈现仍未在本机 XNU 上验证。
+
+## 后续最小实验：局部 CX GDSC 开关
+
+`polarisgmutest=4` 默认关闭，用于检验继承的共享供电条件能否支持局部 CX 电源门。
+它不发送 CX/MX ARC 投票。厂商 `rpmh_regulator_arc_get_voltage_sel` 返回驱动缓存，
+不能把 Recovery 的读数当作 XNU 接手时可以恢复的原始投票。
+
+实现只允许取得初始 PWR_ON=0、SW_COLLAPSE=1、HW_CONTROL=0 的 CX GDSC；
+清除 collapse 位后按本机 DT 等待最多 500us，从 GPUCC 的 `0x1540` 状态别名确认上电。
+仅在两个电源状态一致、GMU 时钟仍未请求且停止时，恢复原 collapse 请求。
+按照 DT `qcom,no-status-check-on-disable` 和厂商 `gdsc_disable` 等待 100us，再记录最终状态。
+独立 TZ/HYP 投票若仍保持上电，会单独报告“请求已恢复、域仍开启”，不会强制关闭。
+硬件接管、状态不可读或 GMU 时钟活动时停止并保留当前供电，不能声称完成回退。
+
+没有共享电压、GMU/PLL/时钟、GX、reset、SMMU 或固件写入。
+主机编译实际 C helper，19 个供电故障场景通过；既有 14 个事务场景、六个 CX 读门槛场景
+和内存边界检查也通过。成功结果只证明局部 CX 开关及回退，尚不证明带时钟负载时的供电、
+GMU 执行或图形加速。内核 CI 和临时启动结果持续记录在 `NOTES.md`。
