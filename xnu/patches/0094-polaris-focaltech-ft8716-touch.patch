@@ -273,12 +273,13 @@ new file mode 100644
 +static bool
 +ft_frame(const uint8_t *buf, uint32_t *mask, int *x, int *y)
 +{
-+	uint32_t seen = 0, active = 0;
++	uint32_t seen = 0;
 +	unsigned n = buf[2] & 0x0fu;
 +	if ((buf[0] & 0x70u) || n > FT_MAX_FINGERS) {
 +		return false;
 +	}
-+	for (unsigned i = 0; i < FT_MAX_FINGERS; ++i) {
++	/* The point-count register bounds the valid slot records. */
++	for (unsigned i = 0; i < n; ++i) {
 +		const uint8_t *p = buf + 3u + i * 6u;
 +		unsigned id = p[2] >> 4;
 +		unsigned event = p[0] >> 6;
@@ -303,10 +304,6 @@ new file mode 100644
 +		*mask |= 1u << id;
 +		x[id] = (int)px;
 +		y[id] = (int)py;
-+		++active;
-+	}
-+	if (active != n) {
-+		return false;
 +	}
 +	return true;
 +}
