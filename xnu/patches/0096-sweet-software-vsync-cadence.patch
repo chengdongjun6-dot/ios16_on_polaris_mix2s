@@ -1,0 +1,64 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -68,7 +68,7 @@
+ #define SWEET_FB_LAYERS                 4
+ #define SWEET_FB_NOTIFY_TYPES           8
+ #define SWEET_FB_NOTIFY_VSYNC           5
+-#define SWEET_FB_VSYNC_US               16667
++#define SWEET_FB_VSYNC_HZ               60
+ #define SWEET_FB_DOT_PITCH              458     /* ppi, as the iPhone X panel */
+ /*
+  * The iOS userland only has status bar / layout data for real iPhone
+@@ -116,6 +116,7 @@
+ 	uint8_t       fPending[SWEET_FB_SWAP_REC_SIZE];     /* latest swap, not yet shown */
+ 	bool          fDirty;
+ 	uint32_t      fFlushTicks;    /* vsync ticks between panel copies */
++	uint32_t      fVsyncUS;       /* software notification interval; not panel timing */
+ 	bool          fPowerOff;      /* RequestPowerChange(0) */
+ 	uint32_t      fFadeStep;      /* fade-out steps done while off */
+ 
+@@ -218,10 +219,24 @@
+ 		IOLog("SWEET FB: no vsync timer\n");
+ 		return false;
+ 	}
++	/*
++	 * sweetfb_hz throttles copies only. Software-rendered backboardd can
++	 * still redraw for every notification, even when that frame is skipped.
++	 * Allow a bounded opt-in software cadence without changing panel clocks.
++	 * Missing/invalid arguments retain the original 60 Hz behavior.
++	 */
++	uint32_t vsyncHz = SWEET_FB_VSYNC_HZ;
++	PE_parse_boot_argn("sweetfb_vsync_hz", &vsyncHz, sizeof(vsyncHz));
++	if (vsyncHz < 10 || vsyncHz > SWEET_FB_VSYNC_HZ) {
++		vsyncHz = SWEET_FB_VSYNC_HZ;
++	}
++	fVsyncUS = (1000000U + vsyncHz - 1) / vsyncHz;
+ 	uint32_t hz = 10;
+ 	PE_parse_boot_argn("sweetfb_hz", &hz, sizeof(hz));
+-	fFlushTicks = (hz == 0 || hz >= 60) ? 1 : 60 / hz;
+-	fVsync->setTimeoutUS(SWEET_FB_VSYNC_US);
++	fFlushTicks = (hz == 0 || hz >= vsyncHz) ? 1 : vsyncHz / hz;
++	fVsync->setTimeoutUS(fVsyncUS);
++	IOLog("SWEET FB: software vsync %u Hz (%u us), copy every %u ticks\n",
++	    vsyncHz, fVsyncUS, fFlushTicks);
+ 
+ 	setProperty(kIOUserClientClassKey, "IOMobileFramebufferUserClient");
+ 	setProperty("external", false);
+@@ -267,7 +282,7 @@
+ 				}
+ 			}
+ 		}
+-		sender->setTimeoutUS(SWEET_FB_VSYNC_US);
++		sender->setTimeoutUS(fb->fVsyncUS);
+ 		return;
+ 	}
+ 	bool flush = fb->fDirty && (count % fb->fFlushTicks) == 0;
+@@ -284,7 +299,7 @@
+ 		fb->present(rec);
+ 		IOFreeData(rec, SWEET_FB_SWAP_REC_SIZE);
+ 	}
+-	sender->setTimeoutUS(SWEET_FB_VSYNC_US);
++	sender->setTimeoutUS(fb->fVsyncUS);
+ }
+ 
+ void
