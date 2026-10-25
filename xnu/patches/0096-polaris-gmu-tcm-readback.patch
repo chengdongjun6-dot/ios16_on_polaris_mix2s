@@ -1,6 +1,6 @@
 --- /dev/null
 +++ b/bsd/dev/polaris_gmu_tcm_test.c
-@@ -0,0 +1,162 @@
+@@ -0,0 +1,146 @@
 +/* Optional Polaris A630 GMU ITCM test. CPU scanout and FT8716 stay active.
 + * polarisgmutest=1: GCC AON; =2: read-only CX status.
 + * Mode 3 TCM code is gated off; no firmware start or GPU acceleration.
@@ -111,34 +111,18 @@
 +        pg_mmio_read(&maps, PG_GCC, PG_GCC_SNOC),
 +        pg_mmio_read(&maps, PG_GCC, PG_GCC_DDR_AXI),
 +        pg_mmio_read(&maps, PG_GCC, PG_GCC_PLL_VOTE));
-+    if (ahb & PG_OFF) { printf("POLARIS GMUTEST: stop before GPUCC: config AHB off\n"); goto done; }
++    if (ahb & PG_CLK_OFF) { printf("POLARIS GMUTEST: stop before GPUCC: config AHB off\n"); goto done; }
 +    if (pg_mode == 1) {
 +        printf("POLARIS GMUTEST: mode 1 is AON-only; GPUCC/GMU skipped\n");
 +        goto done;
 +    }
 +    maps.gpucc = ml_io_map(0x05090000, 0x9000);
 +    if (!maps.gpucc) goto done;
-+    uint32_t cx = pg_mmio_read(&maps, PG_GPUCC, PG_CX_GDSCR);
-+    pg_print(NULL, "CX GDSCR", cx, 0);
 +    if (pg_mode == 2) {
-+        /* Read the power-domain gate first; if off, immediately stop. */
-+        if (!(cx & PG_OFF)) {
-+            pg_print(NULL, "CX HW control", pg_mmio_read(&maps, PG_GPUCC, PG_CX_HW), 0);
-+            pg_print(NULL, "GMU/CXO clocks", pg_mmio_read(&maps, PG_GPUCC, PG_GMU_CLK),
-+                     pg_mmio_read(&maps, PG_GPUCC, PG_CXO_CLK));
-+            pg_print(NULL, "GMU RCG", pg_mmio_read(&maps, PG_GPUCC, PG_RCG),
-+                     pg_mmio_read(&maps, PG_GPUCC, PG_RCG + 4));
-+        } else {
-+            printf("POLARIS GMUTEST: CX reports off; no further GPUCC or GMU access\n");
-+        }
++        (void)pg_cx_status(&io);
 +        goto done;
 +    }
 +    if (pg_mode != 3) goto done;
-+    pg_print(NULL, "CX HW control", pg_mmio_read(&maps, PG_GPUCC, PG_CX_HW), 0);
-+    pg_print(NULL, "clocks inherited", pg_mmio_read(&maps, PG_GPUCC, PG_GMU_CLK),
-+             pg_mmio_read(&maps, PG_GPUCC, PG_CXO_CLK));
-+    pg_print(NULL, "RCG inherited", pg_mmio_read(&maps, PG_GPUCC, PG_RCG),
-+             pg_mmio_read(&maps, PG_GPUCC, PG_RCG + 4));
 +    /* Mapping alone does not read GMU; the core gates each MMIO by power/clock state. */
 +    maps.gmu = ml_io_map(0x0506a000, 0x30000);
 +    if (!maps.gmu) goto done;
@@ -165,7 +149,7 @@
 +#endif
 --- /dev/null
 +++ b/bsd/dev/polaris_gmu_tcm_test.h
-@@ -0,0 +1,188 @@
+@@ -0,0 +1,211 @@
 +/* Polaris GMU ITCM experiment, shared with host fault-injection tests.
 + * Register facts: MiCode c7cb50c18f81 gpucc-sdm845.c/adreno_a6xx.c.
 + * Does not vote rails, release CM3 reset, touch SMMU, or submit GPU work.
@@ -186,7 +170,8 @@
 +#define PG_RCG 0x1120u
 +#define PG_CFG_MASK 0x371fu
 +#define PG_XO_CFG 1u /* BI_TCXO, HID divide-by-one per MiCode freq table */
-+#define PG_OFF (1u << 31)
++#define PG_CLK_OFF (1u << 31) /* CBCR halt status: 1 = clock off. */
++#define PG_GDSC_PWR_ON (1u << 31) /* GDSCR status: 1 = domain on. */
 +#define PG_SW_COLLAPSE 1u
 +#define PG_DRAM_BASE 0x100000000ULL
 +#define PG_DRAM_SIZE6 0x7cc00000ULL
@@ -215,6 +200,26 @@
 +{ io->write(io->ctx, b, o, v); }
 +static void pg_report(struct pg_io *io, const char *tag, uint32_t a, uint32_t b)
 +{ io->report(io->ctx, tag, a, b); }
++static bool pg_cx_on(uint32_t cx)
++{
++    /* MiCode c7cb50c18f81 gdsc-regulator.c:168-187. */
++    return (cx & PG_GDSC_PWR_ON) && !(cx & PG_SW_COLLAPSE);
++}
++static bool pg_cx_status(struct pg_io *io)
++{
++    uint32_t cx = pg_read(io, PG_GPUCC, PG_CX_GDSCR);
++    pg_report(io, "CX GDSCR", cx, 0);
++    if (!pg_cx_on(cx)) {
++        pg_report(io, "CX off/collapsing; further GPUCC/GMU withheld", cx, 0);
++        return false;
++    }
++    pg_report(io, "CX HW control", pg_read(io, PG_GPUCC, PG_CX_HW), 0);
++    pg_report(io, "GMU/CXO clocks", pg_read(io, PG_GPUCC, PG_GMU_CLK),
++              pg_read(io, PG_GPUCC, PG_CXO_CLK));
++    pg_report(io, "GMU RCG", pg_read(io, PG_GPUCC, PG_RCG),
++              pg_read(io, PG_GPUCC, PG_RCG + 4));
++    return true;
++}
 +static bool pg_poll(struct pg_io *io, enum pg_block b, uint32_t o,
 +                    uint32_t mask, uint32_t expected)
 +{
@@ -249,18 +254,20 @@
 +        firmware[0] < 0x40000u || firmware[0] >= 0x50000u ||
 +        (firmware[0] & 3u) || !(firmware[1] & 1u) ||
 +        (firmware[1] & ~1u) >= PG_WORDS * 4u) return PG_BAD_FW;
-+    if (pg_read(io, PG_GCC, PG_GCC_AHB) & PG_OFF) return PG_NO_AHB;
++    if (pg_read(io, PG_GCC, PG_GCC_AHB) & PG_CLK_OFF) return PG_NO_AHB;
 +    cx = pg_read(io, PG_GPUCC, PG_CX_GDSCR);
++    /* GDSCR must pass before even reading the hardware status alias. */
++    if (!pg_cx_on(cx)) return PG_NO_CX;
 +    hw = pg_read(io, PG_GPUCC, PG_CX_HW);
 +    pg_report(io, "CX inherited", cx, hw);
 +    /* No regulator/RPMh owner exists here; never power an off domain. */
-+    if (!((cx | hw) & PG_OFF) || (cx & PG_SW_COLLAPSE)) return PG_NO_CX;
++    if (!(hw & PG_GDSC_PWR_ON)) return PG_NO_CX;
 +    old_gmu = pg_read(io, PG_GPUCC, PG_GMU_CLK);
 +    old_cxo = pg_read(io, PG_GPUCC, PG_CXO_CLK);
 +    old_cfg = pg_read(io, PG_GPUCC, PG_RCG + 4);
 +    pg_report(io, "clocks inherited", old_gmu, old_cxo);
 +    /* A clock enabled or running at handoff could belong to live firmware. */
-+    if ((old_gmu & 1u) || !(old_gmu & PG_OFF) ||
++    if ((old_gmu & 1u) || !(old_gmu & PG_CLK_OFF) ||
 +        (pg_read(io, PG_GPUCC, PG_RCG) & 1u)) return PG_BUSY;
 +    /* XO 19.2 MHz is an SDM845 GMU source. No PLL or voltage increase. */
 +    if ((old_cfg & PG_CFG_MASK) != PG_XO_CFG) {
@@ -271,10 +278,10 @@
 +        cxo_changed = true;
 +        pg_masked(io, PG_CXO_CLK, 1u, 1u);
 +    }
-+    if (!pg_poll(io, PG_GPUCC, PG_CXO_CLK, PG_OFF, 0)) goto restore;
++    if (!pg_poll(io, PG_GPUCC, PG_CXO_CLK, PG_CLK_OFF, 0)) goto restore;
 +    gmu_changed = true;
 +    pg_masked(io, PG_GMU_CLK, 1u, 1u);
-+    if (!pg_poll(io, PG_GPUCC, PG_GMU_CLK, PG_OFF, 0)) goto restore;
++    if (!pg_poll(io, PG_GPUCC, PG_GMU_CLK, PG_CLK_OFF, 0)) goto restore;
 +    pg_report(io, "XO clocks ready", pg_read(io, PG_GPUCC, PG_RCG + 4),
 +              pg_read(io, PG_GPUCC, PG_GMU_CLK));
 +    /* Never assert reset on possibly active firmware; require reset already held. */
@@ -324,11 +331,11 @@
 +    }
 +    if (gmu_changed) {
 +        pg_masked(io, PG_GMU_CLK, 1u, old_gmu);
-+        restore_ok = pg_poll(io, PG_GPUCC, PG_GMU_CLK, PG_OFF, PG_OFF) && restore_ok;
++        restore_ok = pg_poll(io, PG_GPUCC, PG_GMU_CLK, PG_CLK_OFF, PG_CLK_OFF) && restore_ok;
 +    }
 +    if (cfg_changed) {
 +        /* A stuck RCG/clock must not be reconfigured while still running. */
-+        if ((pg_read(io, PG_GPUCC, PG_GMU_CLK) & PG_OFF) &&
++        if ((pg_read(io, PG_GPUCC, PG_GMU_CLK) & PG_CLK_OFF) &&
 +            !(pg_read(io, PG_GPUCC, PG_RCG) & 1u))
 +            restore_ok = pg_update_rcg(io, old_cfg) && restore_ok;
 +        else restore_ok = false;
