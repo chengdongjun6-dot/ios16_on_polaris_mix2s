@@ -1,0 +1,440 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -113,3 +113,4 @@ bsd/dev/sweet_usb.c			standard
+ bsd/dev/polaris_touch_diag.c			standard
+ bsd/dev/polaris_touch_i2c.c			standard
++bsd/dev/polaris_touch_ft.c			standard
+ bsd/dev/mem.c			standard
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -53,4 +53,5 @@ extern void sweet_sample_start(void);
+ extern void sweet_keys_init(void);
+ extern void sweet_touch_init(void);
+ extern void polaris_touch_diag(void);
+ extern void polaris_touch_i2c_init(void);
++extern void polaris_touch_ft_init(void);
+ extern void sweet_usb_probe(void);
+@@ -661,4 +662,5 @@ sweet_ufs_init(void)
+ 	sweet_keys_init();
+ 	sweet_touch_init();
+ 	polaris_touch_diag();
+ 	polaris_touch_i2c_init();
++	polaris_touch_ft_init();
+ 	sweet_usb_probe();
+diff --git a/bsd/dev/polaris_touch_ft.c b/bsd/dev/polaris_touch_ft.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/polaris_touch_ft.c
+@@ -0,0 +1,466 @@
++/*
++ * Polaris FocalTech FT8716 touch bring-up.
++ *
++ * The late Polaris panel variant uses ft5x46_i2c at address 0x38,
++ * identified by Linux as chip 0x87 / firmware ft8716_ebbg_incell_ebbg_d5x.
++ * This is deliberately separate from the Synaptics S3330 RMI4 experiment:
++ * both variants share GPIO33/34 and RESET99, but have different wire
++ * protocols. The driver is opt-in with polaristouchft=1, polls without
++ * touching the IRQ line, and releases all contacts on any invalid frame.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <kern/sched_prim.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++extern bool polaris_touch_i2c_board(void);
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern kern_return_t thread_terminate(thread_t);
++extern void sweet_hid_touch(int finger, int down, int x, int y);
++
++#define FT_NORTH_PA       0x03900000u
++#define FT_SDA_CFG        (33u * 0x1000u)
++#define FT_SCL_CFG        (34u * 0x1000u)
++#define FT_RESET_CFG      (99u * 0x1000u)
++#define FT_IO_REG         4u
++#define FT_I2C_ADDR       0x38u
++#define FT_CFG_MASK       0x3ffu
++#define FT_IN_PULL_UP     (3u | (2u << 6))
++#define FT_OUT_LOW        ((2u << 6) | 0x200u)
++#define FT_MAX_READ       64u
++#define FT_MAX_FINGERS    10u
++#define FT_X_MAX          1080u
++#define FT_Y_MAX          2160u
++#define FT_FRAME_BYTES    (3u + FT_MAX_FINGERS * 6u)
++
++static vm_offset_t ft_gpio;
++static vm_offset_t ft_reset_gpio;
++static uint32_t ft_saved_sda_cfg, ft_saved_scl_cfg;
++static uint32_t ft_saved_sda_io, ft_saved_scl_io;
++static int ft_sleep_chan;
++static bool ft_started;
++static bool ft_down[FT_MAX_FINGERS];
++static int ft_x[FT_MAX_FINGERS], ft_y[FT_MAX_FINGERS];
++
++static uint32_t
++ft_rd(uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(ft_gpio + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return v;
++}
++
++static void
++ft_wr(uint32_t off, uint32_t v)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(ft_gpio + off) = v;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
++static uint32_t
++ft_reset_rd(uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(ft_reset_gpio + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return v;
++}
++
++static void
++ft_reset_wr(uint32_t off, uint32_t v)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(ft_reset_gpio + off) = v;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
++/* Drive low by latching zero before enabling output; release to input/pull-up. */
++static void
++ft_line(uint32_t cfg, bool release)
++{
++	uint32_t old = ft_rd(cfg);
++	if (!release) {
++		ft_wr(cfg + FT_IO_REG, ft_rd(cfg + FT_IO_REG) & ~2u);
++	}
++	ft_wr(cfg, (old & ~FT_CFG_MASK) | (release ? FT_IN_PULL_UP : FT_OUT_LOW));
++}
++
++static bool
++ft_high(uint32_t cfg)
++{
++	return (ft_rd(cfg + FT_IO_REG) & 1u) != 0;
++}
++
++static bool
++ft_clock(void)
++{
++	ft_line(FT_SCL_CFG, true);
++	for (unsigned i = 0; i < 20; ++i) {
++		if (ft_high(FT_SCL_CFG)) {
++			delay(5);
++			return true;
++		}
++		delay(5);
++	}
++	return false;
++}
++
++static void
++ft_stop(void)
++{
++	ft_line(FT_SDA_CFG, false);
++	delay(5);
++	(void)ft_clock();
++	ft_line(FT_SDA_CFG, true);
++	delay(5);
++}
++
++static bool
++ft_idle(void)
++{
++	ft_line(FT_SDA_CFG, true);
++	ft_line(FT_SCL_CFG, true);
++	delay(20);
++	return ft_high(FT_SDA_CFG) && ft_high(FT_SCL_CFG);
++}
++
++static bool
++ft_start(bool repeated)
++{
++	ft_line(FT_SDA_CFG, true);
++	if (!repeated) {
++		if (!ft_idle()) {
++			return false;
++		}
++	} else if (!ft_clock()) {
++		return false;
++	}
++	if (!ft_high(FT_SDA_CFG) || !ft_high(FT_SCL_CFG)) {
++		return false;
++	}
++	ft_line(FT_SDA_CFG, false);
++	delay(5);
++	ft_line(FT_SCL_CFG, false);
++	delay(5);
++	return true;
++}
++
++static bool
++ft_write_byte(uint8_t b)
++{
++	for (int i = 7; i >= 0; --i) {
++		ft_line(FT_SDA_CFG, (b & (1u << i)) != 0);
++		delay(3);
++		if (!ft_clock()) {
++			return false;
++		}
++		ft_line(FT_SCL_CFG, false);
++		delay(3);
++	}
++	ft_line(FT_SDA_CFG, true);
++	delay(5);
++	if (!ft_clock()) {
++		return false;
++	}
++	bool ack = !ft_high(FT_SDA_CFG);
++	ft_line(FT_SCL_CFG, false);
++	delay(5);
++	return ack;
++}
++
++static bool
++ft_read_byte(uint8_t *out, bool ack)
++{
++	uint8_t b = 0;
++	ft_line(FT_SDA_CFG, true);
++	for (unsigned i = 0; i < 8; ++i) {
++		if (!ft_clock()) {
++			return false;
++		}
++		b = (uint8_t)((b << 1) | (ft_high(FT_SDA_CFG) ? 1u : 0u));
++		ft_line(FT_SCL_CFG, false);
++		delay(3);
++	}
++	ft_line(FT_SDA_CFG, !ack);
++	delay(3);
++	if (!ft_clock()) {
++		return false;
++	}
++	ft_line(FT_SCL_CFG, false);
++	ft_line(FT_SDA_CFG, true);
++	*out = b;
++	return true;
++}
++
++/* FT5x46/FT8716 protocol: one register byte, repeated-start, then bytes. */
++static bool
++ft_read(uint8_t reg, uint8_t *buf, unsigned len)
++{
++	bool ok = false;
++	if (!len || len > FT_MAX_READ || !ft_start(false)) {
++		goto out;
++	}
++	if (!ft_write_byte(FT_I2C_ADDR << 1) || !ft_write_byte(reg) ||
++	    !ft_start(true) || !ft_write_byte((FT_I2C_ADDR << 1) | 1u)) {
++		goto out;
++	}
++	for (unsigned i = 0; i < len; ++i) {
++		if (!ft_read_byte(&buf[i], i + 1 < len)) {
++			goto out;
++		}
++	}
++	ok = true;
++out:
++	ft_stop();
++	return ok && ft_idle();
++}
++
++static void
++ft_wait(unsigned ms)
++{
++	uint64_t deadline;
++	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
++	(void)assert_wait_deadline(&ft_sleep_chan, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++static void
++ft_release(void)
++{
++	for (unsigned i = 0; i < FT_MAX_FINGERS; ++i) {
++		if (ft_down[i]) {
++			sweet_hid_touch((int)i, 0, ft_x[i], ft_y[i]);
++			ft_down[i] = false;
++		}
++	}
++}
++
++/* Decode the standard 6-byte FocalTech object format. */
++static bool
++ft_frame(const uint8_t *buf, uint32_t *mask, int *x, int *y)
++{
++	uint32_t seen = 0, active = 0;
++	unsigned n = buf[2] & 0x0fu;
++	if ((buf[0] & 0x70u) || n > FT_MAX_FINGERS) {
++		return false;
++	}
++	for (unsigned i = 0; i < FT_MAX_FINGERS; ++i) {
++		const uint8_t *p = buf + 3u + i * 6u;
++		unsigned id = p[2] >> 4;
++		unsigned event = p[0] >> 6;
++		if (id >= FT_MAX_FINGERS) {
++			break;
++		}
++		if (seen & (1u << id)) {
++			return false;
++		}
++		seen |= 1u << id;
++		if (event == 1u) {
++			continue;
++		}
++		if (event == 3u) {
++			return false;
++		}
++		unsigned px = ((unsigned)(p[0] & 0x0fu) << 8) | p[1];
++		unsigned py = ((unsigned)(p[2] & 0x0fu) << 8) | p[3];
++		if (px >= FT_X_MAX || py >= FT_Y_MAX) {
++			return false;
++		}
++		*mask |= 1u << id;
++		x[id] = (int)px;
++		y[id] = (int)py;
++		++active;
++	}
++	if (active != n) {
++		return false;
++	}
++	return true;
++}
++
++static void
++ft_report(uint32_t mask, const int *x, const int *y)
++{
++	for (unsigned i = 0; i < FT_MAX_FINGERS; ++i) {
++		uint32_t bit = 1u << i;
++		if (mask & bit) {
++			if (!ft_down[i] || ft_x[i] != x[i] || ft_y[i] != y[i]) {
++				sweet_hid_touch((int)i, 1, x[i], y[i]);
++			}
++			ft_down[i] = true;
++			ft_x[i] = x[i];
++			ft_y[i] = y[i];
++		} else if (ft_down[i]) {
++			sweet_hid_touch((int)i, 0, ft_x[i], ft_y[i]);
++			ft_down[i] = false;
++		}
++	}
++}
++
++static void
++ft_restore_bus(void)
++{
++	ft_line(FT_SDA_CFG, true);
++	ft_line(FT_SCL_CFG, true);
++	ft_wr(FT_SDA_CFG + FT_IO_REG, ft_saved_sda_io);
++	ft_wr(FT_SCL_CFG + FT_IO_REG, ft_saved_scl_io);
++	ft_wr(FT_SDA_CFG, ft_saved_sda_cfg);
++	ft_wr(FT_SCL_CFG, ft_saved_scl_cfg);
++}
++
++static bool
++ft_release_reset(void)
++{
++	uint32_t cfg = ft_reset_rd(0), io = ft_reset_rd(FT_IO_REG);
++	printf("POLARIS FT: RESET99 before cfg=0x%x io=0x%x\n", cfg, io);
++	/* Linux/0090 board state: active-low reset is output-low at 0x201. */
++	if ((cfg & FT_CFG_MASK) != 0x201u) {
++		printf("POLARIS FT: RESET99 config unexpected; refusing release\n");
++		return false;
++	}
++	if (!(io & 2u)) {
++		ft_reset_wr(FT_IO_REG, io | 2u);
++	}
++	ft_wait(200);
++	if (!(ft_reset_rd(FT_IO_REG) & 1u)) {
++		printf("POLARIS FT: RESET99 pad did not rise\n");
++		return false;
++	}
++	printf("POLARIS FT: RESET99 released cfg=0x%x io=0x%x\n",
++	    ft_reset_rd(0), ft_reset_rd(FT_IO_REG));
++	return true;
++}
++
++static void
++ft_thread(void *arg __unused, wait_result_t result __unused)
++{
++	uint8_t frame[FT_FRAME_BYTES] = {0};
++	ft_gpio = ml_io_map(FT_NORTH_PA, 0x23000);
++	ft_reset_gpio = ml_io_map(FT_NORTH_PA + FT_RESET_CFG, 0x1000);
++	if (!ft_gpio || !ft_reset_gpio) {
++		printf("POLARIS FT: TLMM map failed\n");
++		goto done;
++	}
++	ft_saved_sda_cfg = ft_rd(FT_SDA_CFG);
++	ft_saved_scl_cfg = ft_rd(FT_SCL_CFG);
++	ft_saved_sda_io = ft_rd(FT_SDA_CFG + FT_IO_REG);
++	ft_saved_scl_io = ft_rd(FT_SCL_CFG + FT_IO_REG);
++	if (!ft_release_reset()) {
++		goto restore;
++	}
++	if (!ft_idle()) {
++		printf("POLARIS FT: bus stuck; no FT8716 transactions\n");
++		goto restore;
++	}
++	if (!ft_read(0, frame, FT_FRAME_BYTES)) {
++		printf("POLARIS FT: initial frame read failed\n");
++		goto restore;
++	}
++	printf("POLARIS FT: FT8716 frame transport active, points=%u\n", frame[2] & 0x0fu);
++	unsigned failures = 0;
++	for (unsigned sample = 0; sample < 12000; ++sample) {
++		uint32_t mask = 0;
++		int x[FT_MAX_FINGERS] = {0}, y[FT_MAX_FINGERS] = {0};
++		if (!ft_read(0, frame, FT_FRAME_BYTES) ||
++		    !ft_frame(frame, &mask, x, y)) {
++			ft_release();
++			if (++failures == 8) {
++				printf("POLARIS FT: repeated invalid frames; stopping\n");
++				break;
++			}
++		} else {
++			failures = 0;
++			ft_report(mask, x, y);
++		}
++		ft_wait(20);
++	}
++	ft_release();
++restore:
++	ft_restore_bus();
++	printf("POLARIS FT: stopped; GPIO33/34 restored\n");
++done:
++	(void)thread_terminate(current_thread());
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++void
++polaris_touch_ft_init(void)
++{
++	int enabled = 0;
++	thread_t thread;
++	if (!polaris_touch_i2c_board()) {
++		return;
++	}
++	(void)PE_parse_boot_argn("polaristouchft", &enabled, sizeof(enabled));
++	if (enabled != 1 || ft_started) {
++		return;
++	}
++	ft_started = true;
++	printf("POLARIS FT: opted in; FT8716 GPIO33/34 I2C, reset99, HID enabled\n");
++	kern_return_t kr = kernel_thread_start(ft_thread, NULL, &thread);
++	if (kr == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	} else {
++		printf("POLARIS FT: thread start failed %d\n", kr);
++	}
++}
++#endif
