@@ -1,5 +1,12 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 FT8716 patch regeneration (current)
+
+- Second fork CI run `40150836582` completed successfully but skipped 0094 because its original hunks targeted the wrong post-0093 source context. The `xnu-buildtree` artifact `12583230109` was downloaded and verified: 52,693,368 bytes, SHA-256 `afb9ff8b75bb620d9ddce91fadbfd1781b4a75f8b947f2e455224047707904a8`.
+- The actual post-0093 files put `polaris_gpu_diag.c`/`polaris_gpu.c` after `polaris_touch_i2c.c` and add `polaris_gpu_init()` in `sweet_ufs.c`. `xnu/patches/0094-polaris-focaltech-ft8716-touch.patch` was regenerated to insert FT8716 between the existing I2C and GPU hooks while preserving the 407-line driver.
+- Validation: `git apply --check --whitespace=error --unsafe-paths --directory=research/ft-ci-401508/tree/src/xnu xnu/patches/0094-polaris-focaltech-ft8716-touch.patch` passed against the extracted CI source. The fix is currently uncommitted; commit, push to `chengdongjun6-dot/ios16_on_polaris_mix2s` branch `polaris-focaltech-0094`, then trigger one new RELEASE/SWEET run.
+- Observation: the phone remains one ADB target `6d0eff91` in OrangeFox/TWRP with `product=polaris`; no partition was written in this milestone. Do not boot or flash until the new kernel contains `POLARIS FT`/`FT8716`, its payload is below the ABL limit, and a separate temporary `fastboot boot` authorization is obtained.
+
 ## 2026-10-25 FT8716 continuation
 
 - The nested worktree `research/ft-build-remote` is the active Git checkout. Commit `379e931` adds an opt-in FocalTech FT8716 driver for the late Polaris panel variant (I2C 0x38, bit-banged GPIO33/34, reset99, standard 6-byte objects, SweetHID reports). Commit `788f8d2` bounds frame parsing by the reported point count and permits release records without treating zero-filled unused slots as contacts.
