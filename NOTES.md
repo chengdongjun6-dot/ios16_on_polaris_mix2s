@@ -1,5 +1,12 @@
 # iOS 16 on Polaris (Mi MIX 2S, SDM845), based on ios-sweet - working notes
 
+## 2026-10-25 mode-4 CX timing cycle: RELEASE passed, image ready
+
+- RELEASE/SWEET CI **40191126435** completed **success** at exact source commit **65a5ced87de58804ec25d76dab79e073a50a2137**. Full log `out/ci-40191126435/ci.log` confirms 0096 applied (not skipped), `polaris_gmu_tcm_test.c` compiled, no own compile errors and one pre-existing declaration-after-statement warning. Review summary `log-review.json` is alongside it.
+- Downloaded kernel matches artifact `SHA256SUMS`: **12285480 B**, SHA-256 **42314e93960d8b00dd2e3c82987b87f9601255373ed32a3375ad9976b0666a03**. Binary contains the new timing-configured/final-GDSCR/result-7 messages and FT8716. No GMU firmware appended.
+- Prepared `out/ci-40191126435/mode4/shim-polaris-gmutest-mode4.img`: **18636800 B**, SHA-256 **475f3d68c3e2ea8fa7759285157996f5061a93b518199994be494f660ae1f8f4**. Payload **11758560 B**, SHA-256 **849bffe9c12cd68cea15cac49ecdde42d42357108fb9b26524ba75c36ab95f2e**, margin **2831392 B** below `0xdea000`. Checked original FT0095 image SHA `c42ece543ae55d3c9969f7b72fea4839f6cfb950c71e035f6a568c9925d83220`; its payload and embedded shim/DTB match the reused inputs exactly. Independently parsed new boot header/ramdisk, verified ADT identities and CPU prefix 4/8. Existing FT8716/scaled-display args unchanged; only adds `polarisgmutest=4`.
+- **Not booted yet at this milestone.** User authorization permits the next temporary test. Local single-attempt `mode4/boot_phone.py` will verify same single recovery/fastboot Polaris, refresh read-only tail baseline, and use only `fastboot boot`. Then await physical lock/touch observation and return to recovery; compare new ring to baseline. No GMU execution or acceleration established.
+
 ## 2026-10-25 active: CX-cycle DT timing correction, ready for RELEASE CI
 
 - User says continue; temporary recovery/fastboot testing remains authorized. Device was rechecked as recovery. No partition write or new boot in this turn yet. Preserve FT0095 fallback and all backups.
