@@ -87,9 +87,21 @@
 这是已存在的 CI，无需重建。随后已下载并核对内核 SHA-256
 `4d1190db841d9eaf20a6a2bb3923d397b0285a68c733af374d83f6496bedf6e0`，
 保留 FT0095 shim/DTB/触摸配置打包 mode 2，经用户授权临时启动。
-`fastboot boot` 返回 OKAY；XNU CX 状态、锁屏和触摸仍等待本次屏幕观察及日志。
+用户已确认锁屏和触摸正常，并返回 recovery。本次新日志读到
+`CX GDSCR=0x00222001`：bit31 PWR_ON 为 0，bit0 SW_COLLAPSE 为 1，说明探测时 CX 关闭。
+GMU/CXO 时钟为 `0x80004220/0x80000001`，RCG 为 `0x80000000`，均未运行。
+这是 XNU 读回结果；日志里仍有一次 PosterBoard sig5，不能声称全部用户态稳定。
 
 现有入口只接受 `polarisgmutest=1/2`：分别为 GCC AON 和只读 CX 状态。
 mode 3 的 TCM 核心虽存在，启动入口仍将其挡住；不能按旧注释宣称 mode 2 会写 TCM。
-先以修正后的 mode 2 获取 XNU CX 实际状态，随后才设计有来源、可撤销的电源操作。
-GMU/HFI、PAS13、隔离映射、CP 写回/fence 和 Mesa 呈现尚未在本机 XNU 上验证。
+
+这次日志暴露了旧 mode-2 分支将时钟的 bit31=OFF 语义误用于 GDSCR，
+因此在 CX 关闭时仍读取了五项 GPUCC 状态，没有按预期停止；没有 GMU 访问或 GPU 写操作。
+[MiCode gdsc_is_enabled](https://github.com/MiCode/Xiaomi_Kernel_OpenSource/blob/c7cb50c18f812629b9620b2b8fa684bc40d82080/drivers/clk/qcom/gdsc-regulator.c#L168)
+明确要求 GDSCR bit31=ON 且 SW_COLLAPSE=0。
+提交 `8bdf56d` 已分离两种状态位名称，并让实际只读分支复用经过主机测试的访问门槛；
+14 个事务场景、六个 CX 门槛场景和内存边界检查通过。该修正尚未经过新的 macOS CI 或手机启动，
+旧测试镜像不应重复使用。
+
+下一步设计有来源、可撤销的 CX/MX/RPMh 与 GDSC 上电操作，并在下一次内核构建中包含上述修正。
+GMU/HFI、PAS13、隔离映射、CP 写回/fence 和 Mesa 呈现仍未在本机 XNU 上验证。
