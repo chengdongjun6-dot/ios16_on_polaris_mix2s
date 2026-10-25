@@ -1,5 +1,13 @@
 # iOS 16 on Polaris (Mi MIX 2S, SDM845), based on ios-sweet - working notes
 
+## 2026-10-25 active: mode-4 CX on/off and timing restore proven on phone
+
+- User confirms new mode-4 image reached iOS lock screen with normal touch and returned to recovery. Verified one recovery Polaris, battery 100%, 32 C. Read only the last 1025 userdata blocks; private `out/ci-40191126435/mode4/recovery-ring.bin` / `.txt`, total **216522 bytes**, flush **14**, SHA-256 **50be7c9d7671f6164805f50fdbac763739811d55c2484d9f485c74515260bc1b**. Ring differs from baseline and explicitly reports mode=4, so this is fresh test evidence.
+- **Observed sequence:** before `0x00222001`; DT timing configured `0x00228001` (wait=8); power ACK GDSCR **0xf8228000**, HW alias **0x80001fe0** (both PWR_ON set); GMU clock **0x80004220** (stopped, local enable clear); collapse restored **0x00228001**; final HW **0x00005ff4** (off); final GDSCR **0x00222001**, byte-for-byte original (wait=2). Result **0=on-and-restored**. Local CX cycle and timing rollback are now proven on this phone under inherited supply conditions.
+- 17 `SWEET HID: touch ` lines and no `panic(cpu` in captured ring. One existing PosterBoard sig5 remains. No shared rail vote, PLL/clock write, GMU/SMMU/PAS/GX access or firmware execution occurred in mode 4; this is not GPU acceleration or proof of voltage sufficiency under clock load.
+- Source/kernel/image: **65a5ced87de58804ec25d76dab79e073a50a2137**, successful RELEASE CI **40191126435**, image SHA **475f3d68c3e2ea8fa7759285157996f5061a93b518199994be494f660ae1f8f4**. Temporary boot only, no partition flash. Exact capture/summary/manifest/log are in the ignored mode4 directory.
+- Next: source/DT-backed GMU XO clock + reset-state probe nested inside the proven CX transaction, with bounded polling and clock restoration before CX collapse. Re-check the vendor RCG/branch driver semantics and all parents/consumers before any clock writes; mode 3 TCM remains disabled. Preserve FT0095; user still authorizes temporary recovery testing.
+
 ## 2026-10-25 active: mode-4 CX cycle temporarily booted; awaiting observation/readback
 
 - RELEASE/SWEET CI **40191126435** completed **success** at exact source commit **65a5ced87de58804ec25d76dab79e073a50a2137**. Full log `out/ci-40191126435/ci.log` confirms 0096 applied (not skipped), `polaris_gmu_tcm_test.c` compiled, no own compile errors and one pre-existing declaration-after-statement warning. Review summary `log-review.json` is alongside it.
