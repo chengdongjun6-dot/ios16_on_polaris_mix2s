@@ -1,5 +1,13 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 user steering: defer frame rate, prioritize display stability then GPU
+
+- User asked to defer frame-rate changes and asked about GPU acceleration after fixing the display. Do not deploy or boot 0096. Its source commit `a0c6b4e` remains available as an optional experiment; cancellation of Actions run `40173669913` requested. Check the final run status before claiming cancellation completed. No image generated/downloaded or booted for 0096.
+- Live recovery read confirms battery `capacity=100` (100%) and `temp=300` (30 C). Earlier 29 C was a temperature reading, not battery percentage.
+- Live recovery KGSL exposes `Adreno630v2` and frequencies 257/342/414/520/596/675/710 MHz. This is evidence from the recovery Linux driver only, not XNU GPU execution. Recovery logs enumerate separate GMU user/kernel and gfx3d user/secure IOMMU groups.
+- Inspected actual 0093 source: only board stage has an implementation; firmware stage returns false with `backend not implemented; no hardware access`. It is a gate, not an accelerator. Host stage tests do not execute the GPU. Kernel rail/clock/bus ownership, GMU/HFI, PAS13, SMMU, CP submission/completion and userspace Mesa/EAGL integration remain missing. Display geometry fixes alone cannot supply them.
+- Current priorities: preserve working FT0095 and CPU framebuffer; continue isolating the confirmed PosterBoard initialization-order assertion and display flicker first. GPU milestone should be an isolated command completing and changing a test buffer before attempting iOS compositing. Existing Sailfish A530 design is a possible architecture reference, not a ready A630 driver. Do not promise GPU completion or a speedup from enabling a boot argument.
+
 ## 2026-10-25 PosterBoard assertion / software rendering investigation (active)
 
 - Active Git checkout: `research/ft-build-remote`, branch `polaris-focaltech-0094`. Device is in recovery with ADB; no reboot or partition write during this investigation. Last recovery battery temperature: 29 C. Fresh read-only ring `out/ci-40157852186/native-quiet-recovery-now.txt` is still total 593,390 bytes / flush 96 (same boot, not a new run).
