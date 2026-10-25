@@ -1,5 +1,13 @@
 # iOS 16 on Polaris (Mi MIX 2S, SDM845), based on ios-sweet - working notes
 
+## 2026-10-25 active: mode-6 bus probe temporarily booted; awaiting readback
+
+- RELEASE/SWEET CI **40194788540** is **completed/success**, exact source **b29375a309a749543742e0a55389154f83149587**. Full `out/ci-40194788540/ci.log` confirms 0096 applied/not skipped and source compiled; no own errors, one pre-existing declaration-order warning. `log-review.json` records checks. The long-running watch command later hit API EOF, but independent `gh run view` confirmed success and exact SHA; do not treat watch-network failure as CI failure.
+- Kernel **12318264 B**, SHA-256 **a0a492a908e304145f18dcc268899bdf899cb6830f6f8bb3e98afdfcb9f2f9d6**, matches artifact SHA256SUMS; new bus probe markers verified in binary. Image `out/ci-40194788540/mode6/shim-polaris-gmutest-mode6.img`, **18636800 B**, SHA-256 **5c8103b5d2a4b91d7504f6a792bec94e8c527c82a70b5629d8b5276963e6105f**. Payload **11758576 B**, SHA-256 **e19ce033ddd433ec9e37f9b2dd5e42cda625e9e0c7b2df27aba39a068c16498f**, **2831376 B** below ABL `0xdea000` bound.
+- Checked original FT0095 SHA; shim/stock DTB reused byte-for-byte, new ramdisk exact, ADT roundtrip and board IDs/CPU prefix 4/8 pass. Keeps FT8716/scaled-display/root args, only adds `polarisgmutest=6`; no firmware blob. Local builder `out/gpu-20261025/build_mode6_dt.py`.
+- **Temporary boot completed:** same single recovery/fastboot Polaris verified, battery 100%, 31 C; fresh baseline unchanged SHA `87b1ac59c3a98d98eb9031bbf83b7ceeb2193ea57796d4b983c5f1bbc8e7343a`, total 226632, flush 15 (mode-5 result). `fastboot boot` Sending OKAY **0.396s**, Booting OKAY **0.063s**, total **0.467s**; exact `mode6/phone-boot.log`. No partition flashed.
+- **Pending user screen/recovery report:** async question asks lock/touch status and >=10 seconds for log flush, then recovery return. Do not repeat boot while pending. When recovery confirmed: `python out/ci-40194788540/mode6/capture_ring.py recovery`, then `python out/ci-40194788540/mode6/analyze_readback.py`. Require changed ring + mode=6. Inspect each bus inherited/ready/final value, owned withdrawals, optional `bus probe CM3 SYSRESET`, clock/CX final result and panic/touch/crash markers. Bus/CM3 success remains unproven. On held-on/unknown-reset, retain the captured result and research ownership before any further transition.
+
 ## 2026-10-25 active: mode-6 bus ownership implemented, ready for CI
 
 - Mode-5 readback below proved XO activation/restoration, but withheld GMU access. Phone remains recovery; new FDT read exactly matches saved `live.dtb` (492460 B). Recovery kernel reports `4.9.186-perf-gc4fc334`; this is not source-revision proof.
