@@ -6,6 +6,7 @@
 - The actual post-0093 files put `polaris_gpu_diag.c`/`polaris_gpu.c` after `polaris_touch_i2c.c` and add `polaris_gpu_init()` in `sweet_ufs.c`. `xnu/patches/0094-polaris-focaltech-ft8716-touch.patch` was regenerated to insert FT8716 between the existing I2C and GPU hooks while preserving the 407-line driver.
 - Validation: `git apply --check --whitespace=error --unsafe-paths --directory=research/ft-ci-401508/tree/src/xnu xnu/patches/0094-polaris-focaltech-ft8716-touch.patch` passed against the extracted CI source. The fix is currently uncommitted; commit, push to `chengdongjun6-dot/ios16_on_polaris_mix2s` branch `polaris-focaltech-0094`, then trigger one new RELEASE/SWEET run.
 - Observation: the phone remains one ADB target `6d0eff91` in OrangeFox/TWRP with `product=polaris`; no partition was written in this milestone. Do not boot or flash until the new kernel contains `POLARIS FT`/`FT8716`, its payload is below the ABL limit, and a separate temporary `fastboot boot` authorization is obtained.
+- CI dispatched after commit `e23da08414e7defc468c5bad44a59f3330bdf15f`: RELEASE/SWEET run `40153198059` (https://github.com/chengdongjun6-dot/ios16_on_polaris_mix2s/actions/runs/40153198059), currently in progress. Do not use an artifact until the run succeeds and its logs show 0094 applied.
 
 ## 2026-10-25 FT8716 continuation
 
