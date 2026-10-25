@@ -1,5 +1,8 @@
 # 2026-10-25 上游 GPU 更新核对
 
+后续本机最终设备树、主线 A630 启动语义、command-db 解析修正和最新 CI 状态见
+[Polaris GPU 依据核对](POLARIS-GPU-EVIDENCE.md)。下文保留首次审阅时的固定提交状态。
+
 核对方式：GitHub REST API（gh）、固定提交源码和 Actions 完整日志。时间按北京时间。只下载和审阅，没有合并驱动、运行新 CI、重启或写入手机分区。
 
 ## 哪些项目有更新

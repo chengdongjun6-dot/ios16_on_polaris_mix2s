@@ -25,6 +25,21 @@ class BcmResource:
     vcd: int
 
 
+def decode_bcm_aux(data: bytes) -> tuple[int, int, int]:
+    """Decode metadata only; zero width does not authorize a bandwidth vote.
+
+    MiCode msm_bus_fabric_rpmh.c:1063-1098 copies width without rejecting zero.
+    Linux a6xx_gmu_rpmh_bw_votes_init has a separate fixed-vote path. The
+    caller needs topology/BCM type to choose that path; width alone is not it.
+    """
+    if len(data) != BCM_AUX_SIZE:
+        raise CommandDbError('invalid BCM auxiliary length')
+    unit, width, vcd, _reserved = struct.unpack('<IHBB', data)
+    if not unit or vcd >= MAX_VCD:
+        raise CommandDbError('invalid BCM metadata')
+    return unit, width, vcd
+
+
 def parse_bcm(data: bytes) -> dict[str, BcmResource]:
     if not HEADER <= len(data) <= MAX_DB or struct.unpack_from('<I', data, 4)[0] != MAGIC:
         raise CommandDbError('invalid command-db length or magic')
@@ -58,9 +73,7 @@ def parse_bcm(data: bytes) -> dict[str, BcmResource]:
             if text in resources or (address >> 16) != BCM_SLAVE or \
                     length != BCM_AUX_SIZE or not _bounded(start, length, len(data)):
                 raise CommandDbError(f'invalid or duplicate BCM entry: {text}')
-            unit, width, vcd, _reserved = struct.unpack_from('<IHBB', data, start)
-            if not unit or not width or vcd >= MAX_VCD:
-                raise CommandDbError(f'invalid BCM metadata: {text}')
+            unit, width, vcd = decode_bcm_aux(data[start:start + length])
             resources[text] = BcmResource(text, address, unit, width, vcd)
     if not resources:
         raise CommandDbError('missing BCM slave')

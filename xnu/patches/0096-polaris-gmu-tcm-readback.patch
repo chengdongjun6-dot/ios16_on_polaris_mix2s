@@ -2,8 +2,8 @@
 +++ b/bsd/dev/polaris_gmu_tcm_test.c
 @@ -0,0 +1,162 @@
 +/* Optional Polaris A630 GMU ITCM test. CPU scanout and FT8716 stay active.
-+ * polarisgmutest=1: clock/domain state only; =2: reversible TCM readback.
-+ * This does not start firmware or provide graphics acceleration.
++ * polarisgmutest=1: GCC AON; =2: read-only CX status.
++ * Mode 3 TCM code is gated off; no firmware start or GPU acceleration.
 + */
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
 +#include <sys/param.h>

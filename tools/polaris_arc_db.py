@@ -2,8 +2,9 @@
 """Parse Qualcomm command-db ARC entries from a supplied offline byte buffer.
 
 No physical memory access, voltage votes, or device interaction. Format from
-MiCode polaris-o-oss drivers/soc/qcom/cmd-db.c. Values are ARC VLVL *indices*,
-not microvolts. Caller must independently establish live source and ownership.
+MiCode polaris-o-oss drivers/soc/qcom/cmd-db.c. Values are virtual voltage
+levels, not microvolts; their array positions are the ARC vote indices.
+Caller must independently establish live source and ownership.
 """
 import argparse
 import struct
@@ -32,6 +33,25 @@ def _u32(data, offset):
 
 def _bounded(start, count, limit):
     return 0 <= start <= limit and 0 <= count <= limit - start
+
+
+def decode_arc_levels(data):
+    """Decode auxiliary bytes without inventing missing command-db metadata.
+
+    Linux a6xx_gmu_rpmh_read_arc trims only trailing zero padding. Preserve
+    off at index 0 and repeated levels: removing either changes vote indices.
+    Reference: torvalds/linux 21a7f44fd076, a6xx_gmu.c:1727-1744.
+    """
+    if not 4 <= len(data) <= MAX_ARC_BYTES or len(data) & 1:
+        raise CommandDbError('invalid ARC auxiliary length')
+    levels = list(struct.unpack('<' + 'H' * (len(data) // 2), data))
+    while levels and levels[-1] == 0:
+        levels.pop()
+    if not levels:
+        raise CommandDbError('empty ARC levels')
+    if any(a > b for a, b in zip(levels, levels[1:])):
+        raise CommandDbError('nonmonotonic ARC levels')
+    return levels
 
 
 def parse_arc(data):
@@ -68,19 +88,8 @@ def parse_arc(data):
                     (address >> 16) != SLAVE or length < 4 or \
                     length > MAX_ARC_BYTES or length & 1 or not _bounded(start, length, len(data)):
                 raise CommandDbError(f'invalid ARC entry for {name}')
-            levels = struct.unpack_from('<' + 'H' * (length // 2), data, start)
-            usable = []
-            terminated = False
-            for value in levels:
-                if value == 0:
-                    terminated = True
-                    continue
-                if terminated or (usable and value <= usable[-1]):
-                    raise CommandDbError(f'nonmonotonic ARC levels for {name}')
-                usable.append(value)
-            if not usable:
-                raise CommandDbError(f'empty ARC levels for {name}')
-            found[name] = dict(address=address, levels=usable,
+            levels = decode_arc_levels(data[start:start + length])
+            found[name] = dict(address=address, levels=levels,
                                priority=(_u32(data, p + 8), _u32(data, p + 12)),
                                aux_version=version)
     if set(found) != set(NAMES):
@@ -101,7 +110,7 @@ def main():
         print(name, f"address={item['address']:#x}",
               f"aux_version={item['aux_version']:#x}",
               f"levels={item['levels']}", f"priority={item['priority']}")
-    print('These are untrusted offline indices, not GPU voltage votes.')
+    print('Offline VLVLs; array positions are vote indices. No GPU votes sent.')
 
 
 if __name__ == '__main__':

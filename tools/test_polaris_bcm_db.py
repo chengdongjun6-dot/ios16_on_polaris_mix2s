@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from polaris_arc_db import CommandDbError
-from polaris_bcm_db import parse_bcm, encode_vote
+from polaris_bcm_db import decode_bcm_aux, parse_bcm, encode_vote
 
 
 def mock_db():
@@ -27,6 +27,22 @@ class BcmTests(unittest.TestCase):
         self.assertEqual(entries['SH0'].address, 0x50000)
         self.assertEqual(entries['MC0'].width, 32)
         self.assertEqual(entries['MC0'].vcd, 1)
+
+    def test_zero_width_metadata_is_preserved(self):
+        data = mock_db()
+        struct.pack_into('<H', data, 192 + 4, 0)
+        entry = parse_bcm(data)['SH0']
+        self.assertEqual((entry.unit_size, entry.width, entry.vcd), (1000, 0, 0))
+        self.assertEqual(decode_bcm_aux(struct.pack('<IHBB', 2000, 0, 3, 0)),
+                         (2000, 0, 3))
+
+    def test_aux_decoder_still_rejects_invalid_length_unit_and_vcd(self):
+        with self.assertRaisesRegex(CommandDbError, 'length'):
+            decode_bcm_aux(b'\0' * 7)
+        for data in (struct.pack('<IHBB', 0, 0, 3, 0),
+                     struct.pack('<IHBB', 2000, 0, 16, 0)):
+            with self.assertRaisesRegex(CommandDbError, 'metadata'):
+                decode_bcm_aux(data)
 
     def test_rejects_wrong_slave_and_truncated_aux(self):
         data = mock_db()

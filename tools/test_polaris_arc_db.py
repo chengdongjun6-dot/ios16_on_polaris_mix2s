@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from polaris_arc_db import CommandDbError, NAMES, parse_arc
+from polaris_arc_db import CommandDbError, NAMES, decode_arc_levels, parse_arc
 
 
 def sample_db():
@@ -27,6 +27,25 @@ class ArcDbTests(unittest.TestCase):
         self.assertEqual(set(items), set(NAMES))
         self.assertEqual(items['gfx.lvl']['levels'], [16, 32, 48])
         self.assertEqual(items['mx.lvl']['address'], 0x30008)
+
+    def test_off_and_duplicate_levels_preserve_vote_indices(self):
+        # Synthetic levels, not a copied device dump. A duplicate is a real
+        # table position; a later level must keep its original vote index.
+        data = sample_db()
+        struct.pack_into('<4H', data, 144 + 72, 0, 16, 16, 32)
+        levels = parse_arc(data)['gfx.lvl']['levels']
+        self.assertEqual(levels, [0, 16, 16, 32])
+        self.assertEqual(next(i for i, v in enumerate(levels) if v >= 32), 3)
+
+    def test_aux_decoder_trims_only_tail_without_reconstructing_database(self):
+        self.assertEqual(decode_arc_levels(struct.pack('<6H', 0, 16, 16, 32, 0, 0)),
+                         [0, 16, 16, 32])
+        self.assertEqual(decode_arc_levels(struct.pack('<2H', 0, 16)), [0, 16])
+        for data in (b'', b'\0' * 3, b'\0' * 34):
+            with self.assertRaisesRegex(CommandDbError, 'length'):
+                decode_arc_levels(data)
+        with self.assertRaisesRegex(CommandDbError, 'empty'):
+            decode_arc_levels(b'\0' * 8)
 
     def test_truncated_aux(self):
         data = sample_db()
