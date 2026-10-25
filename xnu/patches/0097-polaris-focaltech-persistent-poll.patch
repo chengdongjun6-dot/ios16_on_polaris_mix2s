@@ -1,0 +1,25 @@
+diff --git a/bsd/dev/polaris_touch_ft.c b/bsd/dev/polaris_touch_ft.c
+--- a/bsd/dev/polaris_touch_ft.c
++++ b/bsd/dev/polaris_touch_ft.c
+@@ -376,7 +376,9 @@
+ 	}
+ 	printf("POLARIS FT: FT8716 frame transport active, points=%u\n", frame[2] & 0x0fu);
+ 	unsigned failures = 0;
+-	for (unsigned sample = 0; sample < 12000; ++sample) {
++	unsigned samples = 0;
++	/* Serve touch for the boot lifetime; consecutive bad frames still stop it. */
++	for (;;) {
+ 		uint32_t mask = 0;
+ 		int x[FT_MAX_FINGERS] = {0}, y[FT_MAX_FINGERS] = {0};
+ 		if (!ft_read(0, frame, FT_FRAME_BYTES) ||
+@@ -391,6 +393,10 @@
+ 			failures = 0;
+ 			ft_report(mask, x, y);
+ 		}
++		/* One-shot evidence that this boot passed the old experiment limit. */
++		if (samples < 12001u && ++samples == 12001u) {
++			printf("POLARIS FT: polling continues past 12000 samples\n");
++		}
+ 		ft_wait(20);
+ 	}
+ 	ft_release();
