@@ -1,5 +1,11 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 mode-2 firmware-lookup bug found and fixed before next boot
+
+- Mode-2 boot from CI `40183764858` reached userspace and touch worked, but ring showed `POLARIS GMUTEST: invalid/missing firmware handoff` before any CX log. This was a mode-selection bug: the code still treated mode 2 as the TCM/firmware mode, so it exited before the read-only CX check. No GPUCC/GMU writes occurred.
+- Corrected mode split: `polarisgmutest=1` AON GCC; `=2` read-only CX GDSCR and conditionally other GPUCC status; `=3` firmware/TCM transaction. The next image must use mode 2 and does not need a GPU-GMU blob. Host tests still pass; fresh patch applies cleanly to clean post-0095 tree. Need one RELEASE build before another phone boot.
+- Previous mode-2 ring also confirms repeated FT8716 HID events and one PosterBoard breakpoint; the device returned to recovery normally. Preserve 0095 fallback and do not interpret the prior mode-2 result as CX state.
+
 ## 2026-10-25 mode-2 CX read-only probe boot (awaiting user screen report)
 
 - RELEASE/SWEET CI **40183764858** succeeded at commit `8c73857ea761a6af1ffd9e6ac39f6e9bcffb0b72`. 0096 compiled/applied. Kernel size 12,301,864 B, SHA-256 `7a65fc238088d6bde84a022a1379e312f7db0b7366f1890ec5b8bb49e94761c9`.
