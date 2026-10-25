@@ -9,14 +9,14 @@ diff --git a/bsd/conf/files b/bsd/conf/files
 diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
 --- a/bsd/dev/sweet_ufs.c
 +++ b/bsd/dev/sweet_ufs.c
-@@ -53,4 +53,5 @@ extern void sweet_sample_start(void);
+@@ -53,5 +53,6 @@ extern void sweet_sample_start(void);
  extern void sweet_keys_init(void);
  extern void sweet_touch_init(void);
  extern void polaris_touch_diag(void);
  extern void polaris_touch_i2c_init(void);
 +extern void polaris_touch_ft_init(void);
  extern void sweet_usb_probe(void);
-@@ -661,4 +662,5 @@ sweet_ufs_init(void)
+@@ -661,5 +661,6 @@ sweet_ufs_init(void)
  	sweet_keys_init();
  	sweet_touch_init();
  	polaris_touch_diag();
@@ -27,7 +27,7 @@ diff --git a/bsd/dev/polaris_touch_ft.c b/bsd/dev/polaris_touch_ft.c
 new file mode 100644
 --- /dev/null
 +++ b/bsd/dev/polaris_touch_ft.c
-@@ -0,0 +1,466 @@
+@@ -0,0 +1,407 @@
 +/*
 + * Polaris FocalTech FT8716 touch bring-up.
 + *
