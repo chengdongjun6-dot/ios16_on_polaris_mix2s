@@ -1,0 +1,31 @@
+--- a/bsd/dev/polaris_touch_ft.c
++++ b/bsd/dev/polaris_touch_ft.c
+@@ -241,10 +241,28 @@
+ 
+ /* Decode the standard 6-byte FocalTech object format. */
+ static bool
++ft_idle_frame(const uint8_t *buf)
++{
++	/* FT8716 reports no contacts as 0x0f plus an all-0xff header. */
++	if ((buf[2] & 0x0fu) != 0x0fu) {
++		return false;
++	}
++	for (unsigned i = 1; i <= 6; ++i) {
++		if (buf[i] != 0xffu) {
++			return false;
++		}
++	}
++	return true;
++}
++
++static bool
+ ft_frame(const uint8_t *buf, uint32_t *mask, int *x, int *y)
+ {
+ 	uint32_t seen = 0;
+ 	unsigned n = buf[2] & 0x0fu;
++	if (ft_idle_frame(buf)) {
++		return true;
++	}
+ 	if ((buf[0] & 0x70u) || n > FT_MAX_FINGERS) {
+ 		return false;
+ 	}

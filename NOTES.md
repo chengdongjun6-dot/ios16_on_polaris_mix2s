@@ -1,5 +1,12 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 FT8716 idle-frame fix (current)
+
+- **0094 phone log decoded read-only:** `out/ft-0094/recovery-log.txt:142-188` proves RESET99 released (`cfg=0x201 io=0x3`), FT8716 I2C transport is active, and the first report has `points=15`; the driver then stops after eight invalid frames. No partition was written. The current phone is back in OrangeFox/TWRP recovery.
+- **Root cause confirmed from MiCode's Polaris-era FocalTech driver:** `fts_read_touchdata()` treats `point_num == 0x0f` with bytes 1..6 all `0xff` as the FT in-cell idle/no-contact sentinel. The XNU parser previously rejected that sentinel as more than ten contacts, so it stopped before a real finger could be read.
+- **0095 source fix prepared:** `xnu/patches/0095-polaris-focaltech-idle-frame.patch` recognizes only that exact sentinel as a valid empty frame, releases existing HID contacts, and keeps all reset, power, I2C, and coordinate parsing behavior unchanged. Patch applies cleanly to the post-0094 CI tree; repository validator reports 95 contiguous patches. It has not been committed or built yet.
+- **Next action:** commit/push 0095 to the writable fork branch, run one RELEASE/SWEET CI build, verify the kernel/payload/image hashes and ABL size, then use a temporary `fastboot boot` only. Do not flash boot or userdata. Success requires the FT thread to remain alive through idle frames and a user-confirmed touch response.
+
 ## 2026-10-25 FT8716 patch regeneration (current)
 
 - Second fork CI run `40150836582` completed successfully but skipped 0094 because its original hunks targeted the wrong post-0093 source context. The `xnu-buildtree` artifact `12583230109` was downloaded and verified: 52,693,368 bytes, SHA-256 `afb9ff8b75bb620d9ddce91fadbfd1781b4a75f8b947f2e455224047707904a8`.
