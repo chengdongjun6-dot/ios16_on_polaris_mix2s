@@ -1,5 +1,12 @@
 # iOS 16 on Polaris (Mi MIX 2S, SDM845), based on ios-sweet - working notes
 
+## 2026-10-25 active: FT0097 long test passed; owned ITCM experiment next
+
+- User reports ten-minute touch/screen operation normal, then explicitly returned to recovery. Fresh read-only ring `out/ci-40197718687/mode6-ft0097/recovery-ring.bin` / `.txt`: **284886 bytes**, flush **79**, SHA-256 **1ed45e93158a0ec228695ee2ff8c72e7dff2e55fa866a71de373a7a6555d91cf**, changed baseline and explicit mode=6. Battery 100%, 34 C.
+- **FT0097 hardware acceptance:** one `POLARIS FT: polling continues past 12000 samples` marker (line 3645), **27 contact down/up events after it**, **65 total**. No stopped/invalid-frame-stop; display on/off/on recorded. This proves sustained operation past the old iteration lifetime, consistent with user ten-minute observation. Captured ring has no `panic(cpu`; existing driverkitd sig9 and PosterBoard sig5 remain, so no claim all userspace is crash-free.
+- Mode6 again reads **SYSRESET=1** and fully restores AXI/MEMNOC requests, inherited SNOC, RCG/branches and CX to **0x00222001**, result=0. Source **5972647052616da5691e65f0c8b426a1da657fd9**, CI **40197718687**, image **fd8bdc54f3a3b82b77681bbd6aab426efe2f1263d231444badaf3c48239213f8** is the new long-touch baseline. Preserve FT0095 as historical fallback too; no new boot/flash in this readback.
+- Next authorized work: integrate default-off mode7 TCM save/load/readback/restore inside proven CX/XO/local-bus ownership, leave CM3 in reset. Reference pinned mainline A630 legacy 32KiB path, MiCode TCM_BOOT and same-device 0139; verify offsets against this final DT. Old mode3 stays unreachable. Require reset/readiness gates, stable saved contents and verified restore before dependency withdrawal; failures with uncertain reset/restoration retain dependencies. Firmware stays in ignored local artifacts. Implementation/CI/phone results for mode7 are not yet available.
+
 ## 2026-10-25 active: FT0097 persistent-touch test temporarily booted; await long observation
 
 - **Current device:** new FT0097 image was temporarily booted from recovery; user observation is pending. Async question asks immediate lock-screen touch, then **at least 10 minutes**, touch plus screen-off/on, then return to recovery. Do not boot again or advance GPU writes while this result is pending.
