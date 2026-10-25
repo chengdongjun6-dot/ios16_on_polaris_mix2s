@@ -141,7 +141,6 @@
 +#endif
 --- /dev/null
 +++ b/bsd/dev/polaris_gmu_tcm_test.h
-@@ -0,0 +1,164 @@
 +/* Polaris GMU ITCM experiment, shared with host fault-injection tests.
 + * Register facts: MiCode c7cb50c18f81 gpucc-sdm845.c/adreno_a6xx.c.
 + * Does not vote rails, release CM3 reset, touch SMMU, or submit GPU work.
@@ -248,6 +247,10 @@
 +        result = PG_NOT_RESET;
 +        goto restore;
 +    }
++    /* Snapshot ITCM while CM3 is still held in reset, before changing
++     * retention. This makes the restore source independent of the test write. */
++    for (unsigned int i = 0; i < PG_WORDS; i++)
++        saved[i] = pg_read(io, PG_GMU, PG_ITCM + 4u * i);
 +    retention = pg_read(io, PG_GMU, PG_RETENTION);
 +    if (!(retention & 1u)) {
 +        retention_changed = true;
@@ -257,8 +260,6 @@
 +        result = PG_RETAIN_ERROR;
 +        goto restore;
 +    }
-+    for (unsigned int i = 0; i < PG_WORDS; i++)
-+        saved[i] = pg_read(io, PG_GMU, PG_ITCM + 4u * i);
 +    tcm_changed = true;
 +    for (unsigned int i = 0; i < PG_WORDS; i++)
 +        pg_write(io, PG_GMU, PG_ITCM + 4u * i, firmware[i]);

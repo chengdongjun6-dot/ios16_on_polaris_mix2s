@@ -1,5 +1,11 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 0096 review correction before rebuild
+
+- First 0096 RELEASE run `40176417823` was intentionally cancelled after ~4 minutes; it produced only buildtree artifacts, no kernel/image was used. Cancellation is confirmed. No device action.
+- Code review found the TCM snapshot should be taken before changing the GMU retention bit. 0096 was corrected so the original ITCM is saved while CM3 is still held in reset, then retention is changed, firmware is written/read back, and the saved ITCM/retention/clocks are restored. Host fault-injection suite still passes all 14 scenarios. Patch applies cleanly and is ready for a fresh CI run.
+- Last recovery state: 0095 fallback is untouched; GPU clock summary showed `gcc_gpu_cfg_ahb_clk` on but GPUCC/GMU/GX clocks and `gpu_cx_gdsc`/`gpu_gx_gdsc` off. This means mode `polarisgmutest=1` can gather handoff state; mode 2 should stop at `PG_NO_CX` without TCM writes until an owned power sequence is implemented.
+
 ## 2026-10-25 GPU work resumed: guarded GMU ITCM experiment (active)
 
 - User authorizes continued GPU work. FT0095 original scaled image remains the confirmed boot/touch fallback. No new device boot yet; recovery still available, battery 100% / 30 C on last read.
