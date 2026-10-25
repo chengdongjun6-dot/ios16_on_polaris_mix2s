@@ -174,3 +174,33 @@ GMU 总线门槛未满足，按设计没有读取 CM3。回退后 RCG/GMU 等待
 CX 再关闭且 GDSCR 回到 `0x00222001`。用户确认锁屏和触摸正常。
 总线三个值只在 CX 上电前分别记录过，不能据此推断上电后的各自状态。
 下一实验先逐项记录和管理本地总线时钟请求，再有条件读取复位状态。
+
+
+## mode 6 总线请求依据与边界
+
+重新读取 recovery 的 `/sys/firmware/fdt`，与既有 492460 字节导出逐字节相同。
+GCC provider 是 `qcom,gcc-sdm845-v2.1`、`reg=0x00100000+0x001f0000`，
+本机 GMU 的 AXI/MEMNOC specifier 分别是 **26 / 41**。
+早期 MiCode 头文件为 20 / 35，不能套用其编号。
+[LineageOS 固定提交 aa8adfe9](https://github.com/LineageOS/android_kernel_xiaomi_sdm845/tree/aa8adfe9bf212c6e93238a86980b4024da4f819a)
+的 `include/dt-bindings/clock/qcom,gcc-sdm845.h:46,61-62` 正好对应 AXI=26、
+MEMNOC=41、SNOC=42；驱动同时匹配 v2.1。它不是当前 recovery 二进制的构建来源证明，
+但与最终 DT 兼容项/编号匹配，并独立确认早期 MiCode 的寄存器语义：
+
+| 时钟 | GCC 偏移 | 本地请求 | 停止语义 |
+| --- | --- | --- | --- |
+| DDR AXI | 0x44038 | bit 0 | BRANCH_VOTED |
+| GPU MEMNOC | 0x7100c | bit 0 | BRANCH_VOTED |
+| GPU SNOC DVM | 0x71018 | bit 0 | BRANCH_HALT |
+
+来源为上述提交的 `gcc-sdm845.c:1786,1993,2006`、绑定数组与 v2.1 匹配表；
+`clk-branch.c:80-105` 确认启用等待 500us，voted disable 等待 10us。
+mode 6 在已验证的 CX/XO 周期中记录三项初值，按 GMU DT 顺序先 AXI、MEMNOC，
+再检查同机 Polaris 0138 使用的 SNOC。只取得初始 bit0=0 的本地请求；
+初始 bit0=1 的请求保持原样，若仍停钟则超时退出。只有三项再次确认运行才读取一次 SYSRESET。
+回退按反序撤销本次取得的请求，voted clock 不要求所有外部投票也关闭；
+本地请求读回失败或 SNOC 无法停钟则保留 CX/时钟并报告。
+CM3 不为 1 或不可读时保留依赖，不写复位或固件。
+
+41 个实际 helper/事务场景通过（其中新增 17 个总线场景）。尚未真机验证 mode 6；
+它不证明总线带宽、RPMh 电压投票、SMMU 隔离、固件运行或 GPU 加速。

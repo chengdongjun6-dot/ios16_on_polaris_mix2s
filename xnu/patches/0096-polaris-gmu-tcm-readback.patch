@@ -1,9 +1,9 @@
 --- /dev/null
 +++ b/bsd/dev/polaris_gmu_tcm_test.c
-@@ -0,0 +1,159 @@
+@@ -0,0 +1,160 @@
 +/* Optional Polaris A630 GMU ITCM test. CPU scanout and FT8716 stay active.
 + * polarisgmutest=1: GCC AON; =2: read-only CX status.
-+ * =4: local CX cycle; =5: CX + XO clock/reset-state probe. Mode 3 stays off.
++ * =4: CX cycle; =5: XO clocks; =6: owned bus requests + reset read. Mode 3 off.
 + * No firmware start or GPU acceleration.
 + */
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
@@ -123,13 +123,14 @@
 +        (void)pg_cx_status(&io);
 +        goto done;
 +    }
-+    if (pg_mode == 4 || pg_mode == 5) {
++    if (pg_mode == 4 || pg_mode == 5 || pg_mode == 6) {
 +        enum pg_cx_result cx_result;
-+        if (pg_mode == 5) {
++        if (pg_mode == 5 || pg_mode == 6) {
 +            maps.gmu = ml_io_map(0x0506a000, 0x30000);
 +            if (!maps.gmu) goto done;
 +        }
-+        cx_result = pg_mode == 5 ? pg_cx_cycle_with_probe(&io, pg_clock_probe) :
++        cx_result = pg_mode == 6 ? pg_cx_cycle_with_probe(&io, pg_bus_clock_probe) :
++            pg_mode == 5 ? pg_cx_cycle_with_probe(&io, pg_clock_probe) :
 +            pg_cx_cycle(&io);
 +        printf("POLARIS GMUTEST: CX cycle result=%u (0=on-and-restored, 1=AHB-off, 2=busy, 3=no-power-ACK, 4=restore-failed, 5=held-on, 6=vote-restored-still-on, 7=timing-rejected)\n",
 +               (unsigned int)cx_result);
@@ -153,7 +154,7 @@
 +    thread_t thread;
 +    if (pg_started || !polaris_touch_i2c_board()) return;
 +    (void)PE_parse_boot_argn("polarisgmutest", &pg_mode, sizeof(pg_mode));
-+    if (pg_mode != 1 && pg_mode != 2 && pg_mode != 4 && pg_mode != 5) return;
++    if (pg_mode != 1 && pg_mode != 2 && pg_mode != 4 && pg_mode != 5 && pg_mode != 6) return;
 +    pg_started = true;
 +    if (kernel_thread_start(pg_thread, NULL, &thread) == KERN_SUCCESS)
 +        thread_deallocate(thread);
@@ -162,10 +163,10 @@
 +#endif
 --- /dev/null
 +++ b/bsd/dev/polaris_gmu_tcm_test.h
-@@ -0,0 +1,483 @@
+@@ -0,0 +1,583 @@
 +/* Polaris GMU ITCM experiment, shared with host fault-injection tests.
 + * Register facts: MiCode c7cb50c18f81 gpucc-sdm845.c/adreno_a6xx.c.
-+ * Mode 4 cycles CX; mode 5 probes XO clocks and reads CM3 reset. No shared rails,
++ * Mode 4 cycles CX; mode 5 probes XO; mode 6 owns local bus requests. No rails,
 + * release CM3 reset, touch SMMU, or submit GPU work.
 + */
 +#ifndef POLARIS_GMU_TCM_TEST_H
@@ -412,10 +413,100 @@
 +    return pg_clk_poll(io, PG_RCG, 1u, 0) &&
 +        (pg_read(io, PG_GPUCC, PG_RCG + 4) & PG_CFG_MASK) == (cfg & PG_CFG_MASK);
 +}
++/* Final Polaris DT gcc-sdm845-v2.1 IDs AXI=26/MEMNOC=41 match Lineage
++ * aa8adfe9bf212c6e93238a86980b4024da4f819a. gcc-sdm845.c:1786,1993,2006
++ * and MiCode c7cb50c18f81 agree on offsets, bit0 and voted/halt semantics.
++ * Order: AXI, MEMNOC (GMU DT order), then extra SNOC as Polaris 0138.
++ */
++enum pg_bus_result { PG_BUS_NOT_READY, PG_BUS_RESET_VERIFIED, PG_BUS_HELD };
++static const uint32_t pg_bus_offsets[3] = {
++    PG_GCC_DDR_AXI, PG_GCC_MEMNOC, PG_GCC_SNOC
++};
++static bool pg_bus_request(struct pg_io *io, uint32_t off, bool enable)
++{
++    uint32_t now = pg_read(io, PG_GCC, off);
++    if (now == 0xffffffffu) return false;
++    pg_write(io, PG_GCC, off, (now & ~(PG_CBCR_RO | 1u)) | (enable ? 1u : 0u));
++    return true;
++}
++static bool pg_bus_poll(struct pg_io *io, uint32_t off, bool enable)
++{
++    uint32_t expected = enable ? 1u : PG_CLK_OFF;
++    for (unsigned int us = 0; us < 500; ++us) {
++        uint32_t now = pg_read(io, PG_GCC, off);
++        if (now == 0xffffffffu) return false;
++        if ((now & (PG_CLK_OFF | 1u)) == expected) return true;
++        io->wait_us(io->ctx, 1);
++    }
++    return false;
++}
++static enum pg_bus_result pg_bus_probe(struct pg_io *io)
++{
++    uint32_t before[3], now, reset;
++    bool owned[3] = {false, false, false};
++    bool verified = false;
++    for (unsigned int i = 0; i < 3; ++i) {
++        before[i] = pg_read(io, PG_GCC, pg_bus_offsets[i]);
++        pg_report(io, "bus probe inherited (a=offset)", pg_bus_offsets[i], before[i]);
++        if (before[i] == 0xffffffffu) return PG_BUS_NOT_READY;
++    }
++    for (unsigned int i = 0; i < 3; ++i) {
++        now = pg_read(io, PG_GCC, pg_bus_offsets[i]);
++        /* Never toggle an inherited or externally changed local request. */
++        if (now == 0xffffffffu || (now & 1u) != (before[i] & 1u)) goto restore;
++        if (!(before[i] & 1u)) {
++            owned[i] = true;
++            if (!pg_bus_request(io, pg_bus_offsets[i], true)) goto held;
++        }
++        if (!pg_bus_poll(io, pg_bus_offsets[i], true)) {
++            pg_report(io, "bus probe not ready (a=offset)", pg_bus_offsets[i],
++                      pg_read(io, PG_GCC, pg_bus_offsets[i]));
++            goto restore;
++        }
++    }
++    /* Recheck all three before the only GMU access. */
++    for (unsigned int i = 0; i < 3; ++i) {
++        now = pg_read(io, PG_GCC, pg_bus_offsets[i]);
++        pg_report(io, "bus probe ready check (a=offset)", pg_bus_offsets[i], now);
++        if (now == 0xffffffffu || (now & (PG_CLK_OFF | 1u)) != 1u) goto restore;
++    }
++    reset = pg_read(io, PG_GMU, PG_RESET);
++    pg_report(io, "bus probe CM3 SYSRESET", reset, 0);
++    if (reset != 1u) {
++        pg_report(io, "bus probe reset unknown; buses/clocks/CX retained", reset, 0);
++        return PG_BUS_HELD;
++    }
++    verified = true;
++restore:
++    for (unsigned int count = 3; count > 0; --count) {
++        unsigned int i = count - 1;
++        if (!owned[i]) continue;
++        if (!pg_bus_request(io, pg_bus_offsets[i], false)) goto held;
++        if (i < 2) {
++            /* DDR/MEMNOC BRANCH_VOTED: another voter may keep CLK_OFF=0.
++             * Vendor clk_branch_wait uses only 10us when withdrawing.
++             */
++            io->wait_us(io->ctx, 10);
++        } else if (!pg_bus_poll(io, pg_bus_offsets[i], false)) goto held;
++        now = pg_read(io, PG_GCC, pg_bus_offsets[i]);
++        pg_report(io, "bus probe request restored (a=offset)", pg_bus_offsets[i], now);
++        if (now == 0xffffffffu || (now & 1u)) goto held;
++    }
++    for (unsigned int i = 0; i < 3; ++i) {
++        now = pg_read(io, PG_GCC, pg_bus_offsets[i]);
++        pg_report(io, "bus probe final (a=offset)", pg_bus_offsets[i], now);
++        if (now == 0xffffffffu || (now & 1u) != (before[i] & 1u)) goto held;
++    }
++    pg_report(io, "bus probe requests restored (a=reset-verified)", verified ? 1u : 0u, 0);
++    return verified ? PG_BUS_RESET_VERIFIED : PG_BUS_NOT_READY;
++held:
++    pg_report(io, "bus probe restore uncertain; clocks/CX retained", 0, 0);
++    return PG_BUS_HELD;
++}
 +/* True permits the enclosing owned CX cycle to collapse. False leaves the
 + * domain available because clock ownership/restoration is uncertain.
 + */
-+static bool pg_clock_probe(struct pg_io *io)
++static bool pg_clock_probe_body(struct pg_io *io, bool acquire_bus)
 +{
 +    uint32_t gmu, cxo, cfg, cmd, reset, phase = 1;
 +    bool timing = false, force = false, configured = false;
@@ -469,6 +560,12 @@
 +    pg_report(io, "clock probe XO RCG", pg_read(io, PG_GPUCC, PG_RCG),
 +              pg_read(io, PG_GPUCC, PG_RCG + 4));
 +    phase = 7;
++    if (acquire_bus) {
++        enum pg_bus_result br = pg_bus_probe(io);
++        if (br == PG_BUS_HELD) return false;
++        verified = br == PG_BUS_RESET_VERIFIED;
++        goto restore;
++    }
 +    /* MiCode GMU DT and Polaris 0138 also prepare AXI/MEMNOC/SNOC.
 +     * Do not infer GMU bus reachability from the core clock alone.
 +     * This mode never acquires or writes those GCC clocks.
@@ -527,6 +624,10 @@
 +    pg_report(io, "clock probe restore failed; CX retained", 0, 0);
 +    return false;
 +}
++static bool pg_clock_probe(struct pg_io *io)
++{ return pg_clock_probe_body(io, false); }
++static bool pg_bus_clock_probe(struct pg_io *io)
++{ return pg_clock_probe_body(io, true); }
 +/* saved must hold PG_WORDS words; firmware and saved must not alias. */
 +static enum pg_result
 +pg_tcm_test(struct pg_io *io, const uint32_t *firmware, uint32_t *saved)
