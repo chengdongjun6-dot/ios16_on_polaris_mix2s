@@ -1,5 +1,11 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 0096 CI failure fixed; 0096 regenerated
+
+- RELEASE run `40177674101` failed only because the 0096 patch's new header lacked a valid unified-diff hunk, so CI compiled `polaris_gmu_tcm_test.c` but could not find `polaris_gmu_tcm_test.h`. No image was produced and no phone action occurred. The malformed patch has been regenerated from a clean post-0095 base with a valid header hunk; the old untracked 0097 split patch was removed.
+- The final 0096 now includes the high-memory 6/8GB Polaris blob-range validator, `ml_static_vtop` roundtrip check, XO source constant, and one guarded helper. Host tests pass: 14 MMIO fault/ownership/readback cases plus valid/invalid high-memory blob bounds. `git apply --check` against the post-0095 CI source passes.
+- The phone's existing ADT uses `dram-base=0x100000000`, `dram-size=0x7cc00000`; the earlier low-memory `0xb0000000` assumption was corrected. The A630 GMU 32KiB blob will be added only to a later mode-2 payload after mode-1 read-only state is observed.
+
 ## 2026-10-25 0096 review correction before rebuild
 
 - First 0096 RELEASE run `40176417823` was intentionally cancelled after ~4 minutes; it produced only buildtree artifacts, no kernel/image was used. Cancellation is confirmed. No device action.

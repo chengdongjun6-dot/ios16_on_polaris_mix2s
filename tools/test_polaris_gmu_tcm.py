@@ -64,6 +64,11 @@ static void init(struct sim*s){ memset(s,0,sizeof(*s));s->cx=PG_OFF;s->hw=PG_OFF
 static enum pg_result run(struct sim*s,uint32_t*fw){uint32_t saved[PG_WORDS];struct pg_io io={s,rd,wr,wait_us,report};return pg_tcm_test(&io,fw,saved);}
 static void restored(struct sim*s){check(memcmp(s->tcm,s->original,sizeof(s->tcm))==0,"original TCM lost");check(s->cfg==0x8602 && s->cxo==(PG_OFF|2) && s->gmu==(PG_OFF|2) && s->retention==0,"state not restored");}
 int main(void){struct sim s;uint32_t fw[PG_WORDS];for(unsigned i=0;i<PG_WORDS;i++)fw[i]=i^0xa5a5a5a5u;fw[0]=0x43f80;fw[1]=9;
+ check(pg_blob_range_valid(PG_DRAM_BASE,PG_DRAM_SIZE6,PG_DRAM_BASE+0x100000,PG_GMU_BLOB_SIZE),"valid 6GB blob range rejected");
+ check(pg_blob_range_valid(PG_DRAM_BASE,PG_DRAM_SIZE8,PG_DRAM_BASE+0x100000,PG_GMU_BLOB_SIZE),"valid 8GB blob range rejected");
+ check(!pg_blob_range_valid(0xb0000000ULL,0x4d000000ULL,0xb0100000ULL,PG_GMU_BLOB_SIZE),"low-memory layout incorrectly accepted");
+ check(!pg_blob_range_valid(PG_DRAM_BASE,PG_DRAM_SIZE6,PG_DRAM_BASE+PG_DRAM_SIZE6-0x4000,PG_GMU_BLOB_SIZE),"out-of-range blob accepted");
+ check(!pg_blob_range_valid(PG_DRAM_BASE,PG_DRAM_SIZE6,PG_DRAM_BASE+0x100001,PG_GMU_BLOB_SIZE),"unaligned blob accepted");
  init(&s);check(run(&s,fw)==PG_OK,"valid test failed");check(s.tcm_writes==PG_WORDS*2,"incomplete TCM transaction");restored(&s);
  init(&s);s.ahb=PG_OFF;check(run(&s,fw)==PG_NO_AHB && s.writes==0,"AHB gate failed");
  init(&s);s.cx=0;s.hw=0;check(run(&s,fw)==PG_NO_CX && s.writes==0,"CX gate failed");
@@ -78,7 +83,7 @@ int main(void){struct sim s;uint32_t fw[PG_WORDS];for(unsigned i=0;i<PG_WORDS;i+
  init(&s);s.fail=6;check(run(&s,fw)==PG_RESTORE_ERROR,"restore corruption not detected");
  init(&s);fw[1]=8;check(run(&s,fw)==PG_BAD_FW && s.writes==0,"invalid vector accepted");fw[1]=9;
  init(&s);s.cxo=3;s.retention=1;check(run(&s,fw)==PG_OK,"inherited CXO case failed");check(s.cxo==3 && s.retention==1,"foreign enable/retention cleared");
- puts("PASS: 14 fault/ownership/readback scenarios; no reset, rail, SMMU or CP writes");return 0;
+ puts("PASS: 14 fault scenarios plus high-memory blob bounds; no reset, rail, SMMU or CP writes");return 0;
 }
 '''
 
@@ -96,7 +101,7 @@ class GmuTransactionTests(unittest.TestCase):
             exe=p/'test'
             subprocess.run([os.environ.get('CC','cc'),'-std=c11','-Wall','-Wextra','-Werror',str(p/'test.c'),'-o',str(exe)],check=True,capture_output=True,text=True)
             result=subprocess.run([str(exe)],check=True,capture_output=True,text=True,timeout=10)
-            self.assertIn('PASS: 14', result.stdout)
+            self.assertIn('PASS: 14 fault scenarios plus high-memory blob bounds', result.stdout)
             print(result.stdout.strip())
 
 if __name__=='__main__': unittest.main()

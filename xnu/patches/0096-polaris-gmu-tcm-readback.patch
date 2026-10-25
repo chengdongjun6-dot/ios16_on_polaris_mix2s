@@ -1,6 +1,6 @@
 --- /dev/null
 +++ b/bsd/dev/polaris_gmu_tcm_test.c
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,140 @@
 +/* Optional Polaris A630 GMU ITCM test. CPU scanout and FT8716 stay active.
 + * polarisgmutest=1: clock/domain state only; =2: reversible TCM readback.
 + * This does not start firmware or provide graphics acceleration.
@@ -20,6 +20,7 @@
 +extern bool polaris_touch_i2c_board(void);
 +extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
 +extern vm_offset_t ml_static_ptovirt(vm_offset_t);
++extern vm_offset_t ml_static_vtop(vm_offset_t);
 +extern kern_return_t thread_terminate(thread_t);
 +extern int hz;
 +void polaris_gmu_test_init(void);
@@ -71,13 +72,14 @@
 +        !pg_prop(map, "GPU-GMU", pair, sizeof(pair)) ||
 +        !pg_prop(chosen, "dram-base", &dram, sizeof(dram)) ||
 +        !pg_prop(chosen, "dram-size", &size, sizeof(size))) return NULL;
-+    /* This test is for the verified low-memory Polaris payload layout only. */
-+    if (dram != 0xb0000000ULL || !size || size > 0x50000000ULL ||
-+        pair[1] != PG_WORDS * 4u || (pair[0] & 0x3fff) ||
-+        pair[0] < dram || pair[0] > dram + size || pair[1] > dram + size - pair[0])
++    /* mkadt --polaris uses the existing 4GiB high-memory bank. */
++    if (!pg_blob_range_valid(dram, size, pair[0], pair[1]))
 +        return NULL;
 +    /* Use the existing RAM mapping, not an uncached MMIO alias of cached RAM. */
-+    return (const uint32_t *)ml_static_ptovirt((vm_offset_t)pair[0]);
++    vm_offset_t va = ml_static_ptovirt((vm_offset_t)pair[0]);
++    if (va == 0 || ml_static_vtop(va) != (vm_offset_t)pair[0])
++        return NULL;
++    return (const uint32_t *)va;
 +}
 +static void
 +pg_thread(__unused void *arg, __unused wait_result_t wr)
@@ -141,6 +143,7 @@
 +#endif
 --- /dev/null
 +++ b/bsd/dev/polaris_gmu_tcm_test.h
+@@ -0,0 +1,184 @@
 +/* Polaris GMU ITCM experiment, shared with host fault-injection tests.
 + * Register facts: MiCode c7cb50c18f81 gpucc-sdm845.c/adreno_a6xx.c.
 + * Does not vote rails, release CM3 reset, touch SMMU, or submit GPU work.
@@ -156,7 +159,13 @@
 +#define PG_CXO_CLK 0x109cu
 +#define PG_RCG 0x1120u
 +#define PG_CFG_MASK 0x371fu
++#define PG_XO_CFG 1u /* BI_TCXO, HID divide-by-one per MiCode freq table */
 +#define PG_OFF (1u << 31)
++#define PG_SW_COLLAPSE 1u
++#define PG_DRAM_BASE 0x100000000ULL
++#define PG_DRAM_SIZE6 0x7cc00000ULL
++#define PG_DRAM_SIZE8 0xfcc00000ULL
++#define PG_GMU_BLOB_SIZE (PG_WORDS * 4u)
 +#define PG_RESET 0x14000u /* A6XX_GMU_CM3_SYSRESET * 4 - 0x6a000 */
 +#define PG_RETENTION 0x14730u /* A6XX_GMU_GENERAL_7 * 4 - 0x6a000 */
 +#define PG_ITCM 0x3000u /* A6XX_GMU_CM3_ITCM_START * 4 - 0x6a000 */
@@ -219,7 +228,7 @@
 +    hw = pg_read(io, PG_GPUCC, PG_CX_HW);
 +    pg_report(io, "CX inherited", cx, hw);
 +    /* No regulator/RPMh owner exists here; never power an off domain. */
-+    if (!(cx & PG_OFF) || !(hw & PG_OFF) || (cx & 1u)) return PG_NO_CX;
++    if (!((cx | hw) & PG_OFF) || (cx & PG_SW_COLLAPSE)) return PG_NO_CX;
 +    old_gmu = pg_read(io, PG_GPUCC, PG_GMU_CLK);
 +    old_cxo = pg_read(io, PG_GPUCC, PG_CXO_CLK);
 +    old_cfg = pg_read(io, PG_GPUCC, PG_RCG + 4);
@@ -228,9 +237,9 @@
 +    if ((old_gmu & 1u) || !(old_gmu & PG_OFF) ||
 +        (pg_read(io, PG_GPUCC, PG_RCG) & 1u)) return PG_BUSY;
 +    /* XO 19.2 MHz is an SDM845 GMU source. No PLL or voltage increase. */
-+    if ((old_cfg & PG_CFG_MASK) != 0) {
++    if ((old_cfg & PG_CFG_MASK) != PG_XO_CFG) {
 +        cfg_changed = true;
-+        if (!pg_update_rcg(io, 1u /* BI_TCXO, divide-by-1 */)) goto restore;
++        if (!pg_update_rcg(io, PG_XO_CFG)) goto restore;
 +    }
 +    if (!(old_cxo & 1u)) {
 +        cxo_changed = true;
@@ -305,6 +314,18 @@
 +    pg_report(io, "restored clocks", pg_read(io, PG_GPUCC, PG_GMU_CLK),
 +              pg_read(io, PG_GPUCC, PG_CXO_CLK));
 +    return restore_ok ? result : PG_RESTORE_ERROR;
++}
++
++/* Verify the boot-time blob lies in XNU's high-memory RAM map before static mapping. */
++static bool pg_blob_range_valid(uint64_t dram, uint64_t size, uint64_t pa, uint64_t len)
++{
++    uint64_t off;
++    if (dram != PG_DRAM_BASE ||
++        (size != PG_DRAM_SIZE6 && size != PG_DRAM_SIZE8) ||
++        len != PG_GMU_BLOB_SIZE || (pa & 0x3fffu) || pa < dram)
++        return false;
++    off = pa - dram;
++    return off <= size && len <= size - off;
 +}
 +#endif
 --- a/bsd/conf/files
