@@ -4,7 +4,7 @@
 
 - Mode-1 image was fully preflighted and ready: `out/ci-40181241335/mode1/shim-polaris-gmutest-mode1.img`, SHA-256 `b06147e04ab4d418c23e59edd7bd7fb4bc1aaf53c09c531018ce0a7f8220bd0c`. It adds only `polarisgmutest=1` to the verified 0095 payload and does not append firmware.
 - Before any `adb reboot bootloader`, the recovery device disappeared: `adb devices` and `fastboot devices` were both empty. The scripted test stopped at its initial recovery-device assertion, so it did not reboot, send the image, or write a partition. ADB server restart and Windows USB PnP refresh still showed no Xiaomi/Android device.
-- The phone must reappear in OrangeFox/TWRP ADB before the mode-1 temporary boot can be attempted. Preserve the 0095 fallback and do not use `fastboot boot` without rechecking exactly one `polaris` target and image SHA.
+- **Recovered and launched mode 1 (2026-10-25):** one recovery ADB target `6d0eff91`, `product=polaris`, battery `100`, temp `300` (=30 C). Verified mode-1 image SHA above; `adb reboot bootloader`, then exactly one fastboot target/product, then `fastboot boot out/ci-40181241335/mode1/shim-polaris-gmutest-mode1.img`: Sending OKAY 0.393 s, Booting OKAY 0.063 s, total 0.465 s. Record `out/ci-40181241335/mode1/phone-boot-20261025.log`. No partition flash. Bootloader acceptance is not yet proof XNU/userspace reached the lock screen. Await physical screen/touch report; after success leave idle >=10 seconds for log flush, return to recovery and read ring. If no boot, use hardware buttons to re-enter recovery; never repeat before collecting available logs. 0095 fallback remains unchanged.
 
 ## 2026-10-25 0096 RELEASE build and read-only mode-1 image prepared
 
