@@ -103,7 +103,7 @@ static void run(struct sim*s,enum pg_cx_result want,unsigned writes){
  if(got!=want){fprintf(stderr,"fault %d: result %u expected %u\n",s->fault,got,want);exit(1);}
  ck(s->writes==writes,"unexpected write count");scenarios++;
 }
-int main(void){(void)pg_bus_clock_probe;(void)pg_clock_probe;struct sim s;(void)pg_tcm_test;(void)pg_cx_status;(void)pg_blob_range_valid;
+int main(void){(void)pg_owned_itcm_test;(void)pg_bus_clock_probe;(void)pg_clock_probe;struct sim s;(void)pg_tcm_test;(void)pg_cx_status;(void)pg_blob_range_valid;
  init(&s);run(&s,PG_CX_RESTORED,4);ck(s.cx==0x00222001u && s.hw==0x5ff4u && s.clock_reads==1,"normal restore");
  init(&s);s.cx=0x00228001u;run(&s,PG_CX_RESTORED,2);ck(s.cx==0x00228001u && !s.timing_writes,"unneeded timing writes");
  init(&s);s.ahb=0x80000001u;run(&s,PG_CX_AHB_OFF,0);

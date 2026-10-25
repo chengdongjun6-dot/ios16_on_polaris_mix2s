@@ -147,7 +147,7 @@ static unsigned scenarios;
 static void run(struct sim*s,enum pg_cx_result want,unsigned reads){
  memcpy(s->bus_before,s->bus,sizeof(s->bus));
  struct pg_io io={s,rd,wr,wait_us,report};
- enum pg_cx_result got=pg_cx_cycle_with_probe(&io,s->acquire_bus?pg_bus_clock_probe:pg_clock_probe);
+ enum pg_cx_result got=pg_cx_cycle_with_probe(&io,s->acquire_bus?pg_bus_clock_probe:pg_clock_probe,NULL);
  if(got!=want){fprintf(stderr,"fault=%d got=%d want=%d\n",s->fault,got,want);exit(1);}
  ck(s->gmu_reads==reads,"unexpected GMU read count");
  if(want==PG_CX_RESTORED){ck(s->cx==0x00222001 && s->hw==0x5ff4 && s->cmd==0x80000000 && s->cfg==0,"state not restored");}
@@ -155,7 +155,7 @@ static void run(struct sim*s,enum pg_cx_result want,unsigned reads){
  if(s->acquire_bus && want==PG_CX_RESTORED){for(unsigned i=0;i<3;i++)ck((s->bus[i]&1u)==(s->bus_before[i]&1u),"bus request not restored");}
  scenarios++;
 }
-int main(void){(void)pg_bus_clock_probe;struct sim s;(void)pg_tcm_test;(void)pg_cx_cycle;(void)pg_cx_status;(void)pg_blob_range_valid;
+int main(void){(void)pg_owned_itcm_test;(void)pg_bus_clock_probe;struct sim s;(void)pg_tcm_test;(void)pg_cx_cycle;(void)pg_cx_status;(void)pg_blob_range_valid;
  init(&s);run(&s,PG_CX_RESTORED,1);ck(s.verified==1 && s.ready==1 && s.gmu==0x80004220 && s.cxo==0x80000000,"normal restore failed");
  init(&s);s.cxo=0x80000001;run(&s,PG_CX_RESTORED,1);ck(s.cxo==0x80000001,"inherited CXO lost");
  for(unsigned i=0;i<3;i++){init(&s);s.bus[i]=0x80000000;run(&s,PG_CX_RESTORED,0);ck(s.ready==1 && !s.verified,"bus gate result");}

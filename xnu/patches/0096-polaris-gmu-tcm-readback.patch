@@ -1,9 +1,10 @@
 --- /dev/null
 +++ b/bsd/dev/polaris_gmu_tcm_test.c
-@@ -0,0 +1,160 @@
+@@ -0,0 +1,179 @@
 +/* Optional Polaris A630 GMU ITCM test. CPU scanout and FT8716 stay active.
 + * polarisgmutest=1: GCC AON; =2: read-only CX status.
-+ * =4: CX cycle; =5: XO clocks; =6: owned bus requests + reset read. Mode 3 off.
++ * =4: CX cycle; =5: XO clocks; =6: bus requests/reset; =7: owned ITCM test.
++ * Mode 3 stays disabled; mode 7 retains CM3 reset and restores original ITCM.
 + * No firmware start or GPU acceleration.
 + */
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
@@ -89,6 +90,7 @@
 +    struct pg_io io = { &maps, pg_mmio_read, pg_mmio_write, pg_delay, pg_print };
 +    const uint32_t *fw = NULL;
 +    uint32_t *saved = NULL;
++    struct pg_itcm_data tcm = {0};
 +    uint32_t ahb;
 +    enum pg_result result;
 +    static const char *const result_name[] = {
@@ -98,11 +100,19 @@
 +        "retention rejected", "TCM mismatch (restored)", "RESTORE FAILED"
 +    };
 +    (void)tsleep(&pg_sleep, PZERO, "pgmutest", hz * 3);
-+    if (pg_mode == 3) {
++    if (pg_mode == 3 || pg_mode == 7) {
 +        fw = pg_firmware();
 +        if (fw == NULL) { printf("POLARIS GMUTEST: invalid/missing firmware handoff\n"); goto done; }
 +        saved = kalloc_data(PG_WORDS * sizeof(uint32_t), Z_WAITOK | Z_ZERO);
 +        if (saved == NULL) { printf("POLARIS GMUTEST: allocation failed\n"); goto done; }
++        if (pg_mode == 7) {
++            tcm.firmware = fw;
++            tcm.saved = saved;
++            if (!pg_itcm_input_valid(&tcm)) {
++                printf("POLARIS GMUTEST: invalid ITCM buffers/vectors; no MMIO\n");
++                goto done;
++            }
++        }
 +    }
 +    maps.gcc = ml_io_map(0x00100000, 0x90000);
 +    if (!maps.gcc) goto done;
@@ -123,17 +133,21 @@
 +        (void)pg_cx_status(&io);
 +        goto done;
 +    }
-+    if (pg_mode == 4 || pg_mode == 5 || pg_mode == 6) {
++    if (pg_mode == 4 || pg_mode == 5 || pg_mode == 6 || pg_mode == 7) {
 +        enum pg_cx_result cx_result;
-+        if (pg_mode == 5 || pg_mode == 6) {
++        if (pg_mode == 5 || pg_mode == 6 || pg_mode == 7) {
 +            maps.gmu = ml_io_map(0x0506a000, 0x30000);
 +            if (!maps.gmu) goto done;
 +        }
-+        cx_result = pg_mode == 6 ? pg_cx_cycle_with_probe(&io, pg_bus_clock_probe) :
-+            pg_mode == 5 ? pg_cx_cycle_with_probe(&io, pg_clock_probe) :
++        cx_result = pg_mode == 7 ? pg_owned_itcm_test(&io, &tcm) :
++            pg_mode == 6 ? pg_cx_cycle_with_probe(&io, pg_bus_clock_probe, NULL) :
++            pg_mode == 5 ? pg_cx_cycle_with_probe(&io, pg_clock_probe, NULL) :
 +            pg_cx_cycle(&io);
-+        printf("POLARIS GMUTEST: CX cycle result=%u (0=on-and-restored, 1=AHB-off, 2=busy, 3=no-power-ACK, 4=restore-failed, 5=held-on, 6=vote-restored-still-on, 7=timing-rejected)\n",
++        printf("POLARIS GMUTEST: CX cycle result=%u (0=on-and-restored, 1=AHB-off, 2=busy, 3=no-power-ACK, 4=restore-failed, 5=held-on, 6=vote-restored-still-on, 7=timing-rejected, 8=input-rejected)\n",
 +               (unsigned int)cx_result);
++        if (pg_mode == 7)
++            printf("POLARIS GMUTEST: owned ITCM result=%u (0=not-run, 1=verified-restored, 2=bad-input, 3=unstable-snapshot, 4=retention-rejected, 5=mismatch-restored, 6=reset-uncertain, 7=restore-failed, 8=access-uncertain)\n",
++                   (unsigned int)tcm.result);
 +        goto done;
 +    }
 +    if (pg_mode != 3) goto done;
@@ -143,8 +157,13 @@
 +    result = pg_tcm_test(&io, fw, saved);
 +    printf("POLARIS GMUTEST: result=%u %s\n", (unsigned int)result, result_name[result]);
 +done:
-+    if (saved != NULL) kfree_data(saved, PG_WORDS * sizeof(uint32_t));
-+    printf("POLARIS GMUTEST: done; no reset/firmware/SMMU/PAS/GX writes; CPU display retained\n");
++    if (saved != NULL && !tcm.modified) kfree_data(saved, PG_WORDS * sizeof(uint32_t));
++    if (tcm.modified)
++        printf("POLARIS GMUTEST: ITCM restore incomplete; saved buffer retained\n");
++    if (pg_mode == 7)
++        printf("POLARIS GMUTEST: mode 7 done; no reset/SMMU/PAS/GX writes; no firmware start requested; CPU display retained\n");
++    else
++        printf("POLARIS GMUTEST: done; no reset/firmware/SMMU/PAS/GX writes; CPU display retained\n");
 +    (void)thread_terminate(current_thread());
 +    thread_block(THREAD_CONTINUE_NULL);
 +}
@@ -154,7 +173,7 @@
 +    thread_t thread;
 +    if (pg_started || !polaris_touch_i2c_board()) return;
 +    (void)PE_parse_boot_argn("polarisgmutest", &pg_mode, sizeof(pg_mode));
-+    if (pg_mode != 1 && pg_mode != 2 && pg_mode != 4 && pg_mode != 5 && pg_mode != 6) return;
++    if (pg_mode != 1 && pg_mode != 2 && pg_mode != 4 && pg_mode != 5 && pg_mode != 6 && pg_mode != 7) return;
 +    pg_started = true;
 +    if (kernel_thread_start(pg_thread, NULL, &thread) == KERN_SUCCESS)
 +        thread_deallocate(thread);
@@ -163,11 +182,11 @@
 +#endif
 --- /dev/null
 +++ b/bsd/dev/polaris_gmu_tcm_test.h
-@@ -0,0 +1,583 @@
+@@ -0,0 +1,749 @@
 +/* Polaris GMU ITCM experiment, shared with host fault-injection tests.
 + * Register facts: MiCode c7cb50c18f81 gpucc-sdm845.c/adreno_a6xx.c.
-+ * Mode 4 cycles CX; mode 5 probes XO; mode 6 owns local bus requests. No rails,
-+ * release CM3 reset, touch SMMU, or submit GPU work.
++ * Mode 4 cycles CX; 5 probes XO; 6 owns buses; 7 saves/tests/restores ITCM.
++ * No shared rail votes, reset release, SMMU, or GPU submission.
 + */
 +#ifndef POLARIS_GMU_TCM_TEST_H
 +#define POLARIS_GMU_TCM_TEST_H
@@ -243,10 +262,11 @@
 +enum pg_cx_result {
 +    PG_CX_RESTORED, PG_CX_AHB_OFF, PG_CX_BUSY, PG_CX_NO_ACK,
 +    PG_CX_RESTORE_FAILED, PG_CX_HELD_ON, PG_CX_VOTE_RESTORED_ON,
-+    PG_CX_CONFIG_FAILED
++    PG_CX_CONFIG_FAILED, PG_CX_INPUT_REJECTED
 +};
 +static enum pg_cx_result
-+pg_cx_cycle_with_probe(struct pg_io *io, bool (*probe)(struct pg_io *))
++pg_cx_cycle_with_probe(struct pg_io *io,
++                       bool (*probe)(struct pg_io *, void *), void *arg)
 +{
 +    uint32_t before, now, hw = 0, clock;
 +    bool powered = false, timing_changed;
@@ -299,14 +319,14 @@
 +        return PG_CX_HELD_ON;
 +    if (powered) {
 +        /* Never collapse a newly visible domain with an active/requested
-+         * GMU clock. No firmware/reset/clock write is part of this test.
++         * GMU clock. The nested probe must restore its resources before collapse.
 +         */
 +        clock = pg_read(io, PG_GPUCC, PG_GMU_CLK);
 +        pg_report(io, "CX cycle GMU clock", clock, 0);
 +        if (clock == 0xffffffffu || (clock & 1u) || !(clock & PG_CLK_OFF))
 +            return PG_CX_HELD_ON;
 +        io->wait_us(io->ctx, 2); /* staggered memory power-up delay */
-+        if (probe != NULL && !probe(io)) return PG_CX_HELD_ON;
++        if (probe != NULL && !probe(io, arg)) return PG_CX_HELD_ON;
 +        result = PG_CX_RESTORED;
 +    }
 +    now = pg_read(io, PG_GPUCC, PG_CX_GDSCR);
@@ -347,7 +367,7 @@
 +    return result;
 +}
 +static enum pg_cx_result pg_cx_cycle(struct pg_io *io)
-+{ return pg_cx_cycle_with_probe(io, NULL); }
++{ return pg_cx_cycle_with_probe(io, NULL, NULL); }
 +static bool pg_poll(struct pg_io *io, enum pg_block b, uint32_t o,
 +                    uint32_t mask, uint32_t expected)
 +{
@@ -440,7 +460,8 @@
 +    }
 +    return false;
 +}
-+static enum pg_bus_result pg_bus_probe(struct pg_io *io)
++static enum pg_bus_result pg_bus_probe(struct pg_io *io,
++    bool (*action)(struct pg_io *, void *), void *arg)
 +{
 +    uint32_t before[3], now, reset;
 +    bool owned[3] = {false, false, false};
@@ -464,7 +485,7 @@
 +            goto restore;
 +        }
 +    }
-+    /* Recheck all three before the only GMU access. */
++    /* Recheck all three before reset MMIO and the optional ITCM action. */
 +    for (unsigned int i = 0; i < 3; ++i) {
 +        now = pg_read(io, PG_GCC, pg_bus_offsets[i]);
 +        pg_report(io, "bus probe ready check (a=offset)", pg_bus_offsets[i], now);
@@ -475,6 +496,17 @@
 +    if (reset != 1u) {
 +        pg_report(io, "bus probe reset unknown; buses/clocks/CX retained", reset, 0);
 +        return PG_BUS_HELD;
++    }
++    if (action != NULL) {
++        if (!action(io, arg)) {
++            pg_report(io, "bus probe action incomplete; dependencies retained", 0, 0);
++            return PG_BUS_HELD;
++        }
++        reset = pg_read(io, PG_GMU, PG_RESET);
++        if (reset != 1u) {
++            pg_report(io, "bus probe reset changed after action; dependencies retained", reset, 0);
++            return PG_BUS_HELD;
++        }
 +    }
 +    verified = true;
 +restore:
@@ -506,7 +538,8 @@
 +/* True permits the enclosing owned CX cycle to collapse. False leaves the
 + * domain available because clock ownership/restoration is uncertain.
 + */
-+static bool pg_clock_probe_body(struct pg_io *io, bool acquire_bus)
++static bool pg_clock_probe_body(struct pg_io *io, bool acquire_bus,
++    bool (*action)(struct pg_io *, void *), void *arg)
 +{
 +    uint32_t gmu, cxo, cfg, cmd, reset, phase = 1;
 +    bool timing = false, force = false, configured = false;
@@ -561,7 +594,7 @@
 +              pg_read(io, PG_GPUCC, PG_RCG + 4));
 +    phase = 7;
 +    if (acquire_bus) {
-+        enum pg_bus_result br = pg_bus_probe(io);
++        enum pg_bus_result br = pg_bus_probe(io, action, arg);
 +        if (br == PG_BUS_HELD) return false;
 +        verified = br == PG_BUS_RESET_VERIFIED;
 +        goto restore;
@@ -624,10 +657,162 @@
 +    pg_report(io, "clock probe restore failed; CX retained", 0, 0);
 +    return false;
 +}
-+static bool pg_clock_probe(struct pg_io *io)
-+{ return pg_clock_probe_body(io, false); }
-+static bool pg_bus_clock_probe(struct pg_io *io)
-+{ return pg_clock_probe_body(io, true); }
++static bool pg_clock_probe(struct pg_io *io, void *arg)
++{ (void)arg; return pg_clock_probe_body(io, false, NULL, NULL); }
++static bool pg_bus_clock_probe(struct pg_io *io, void *arg)
++{ (void)arg; return pg_clock_probe_body(io, true, NULL, NULL); }
++/* A630 legacy flat ITCM load: Linux 21a7f44fd076 a6xx_gmu.c:894-904;
++ * MiCode c7cb50c18f81 adreno_a6xx.c:1803-1824. The extra snapshot and
++ * restoration are diagnostic ownership rules, not a firmware boot sequence.
++ */
++enum pg_itcm_result {
++    PG_ITCM_NOT_RUN, PG_ITCM_OK, PG_ITCM_BAD_INPUT, PG_ITCM_SNAPSHOT_UNSTABLE,
++    PG_ITCM_RETENTION_REJECTED, PG_ITCM_MISMATCH_RESTORED,
++    PG_ITCM_RESET_UNCERTAIN, PG_ITCM_RESTORE_FAILED, PG_ITCM_ACCESS_UNCERTAIN
++};
++struct pg_itcm_data {
++    const uint32_t *firmware;
++    uint32_t *saved;
++    enum pg_itcm_result result;
++    bool modified;
++};
++static bool pg_itcm_input_valid(const struct pg_itcm_data *t)
++{
++    uintptr_t fw, saved, distance;
++    if (t == NULL || t->firmware == NULL || t->saved == NULL) return false;
++    fw = (uintptr_t)t->firmware;
++    saved = (uintptr_t)t->saved;
++    distance = fw > saved ? fw - saved : saved - fw;
++    if (((fw | saved) & 3u) || distance < PG_GMU_BLOB_SIZE) return false;
++    return t->firmware[0] >= 0x40000u && t->firmware[0] < 0x50000u &&
++        !(t->firmware[0] & 3u) && (t->firmware[1] & 1u) &&
++        (t->firmware[1] & ~1u) < PG_GMU_BLOB_SIZE;
++}
++static bool pg_itcm_reset(struct pg_io *io, struct pg_itcm_data *t)
++{
++    uint32_t reset = pg_read(io, PG_GMU, PG_RESET);
++    if (reset == 1u) return true;
++    pg_report(io, "ITCM reset uncertain; dependencies retained", reset, 0);
++    t->result = PG_ITCM_RESET_UNCERTAIN;
++    return false;
++}
++static bool pg_itcm_restore_retention(struct pg_io *io,
++                                      struct pg_itcm_data *t, uint32_t before)
++{
++    uint32_t now;
++    if (!pg_itcm_reset(io, t)) return false;
++    now = pg_read(io, PG_GMU, PG_RETENTION);
++    /* Preserve an inherited request and never overwrite an unexpected field. */
++    if (now == before) return true;
++    if (now != (before | 1u) || (before & 1u)) return false;
++    pg_write(io, PG_GMU, PG_RETENTION, now & ~1u);
++    return pg_read(io, PG_GMU, PG_RETENTION) == before;
++}
++static bool pg_itcm_transfer(struct pg_io *io, void *arg)
++{
++    struct pg_itcm_data *t = arg;
++    uint32_t retention, hw, bad = 0;
++    if (!pg_itcm_input_valid(t)) {
++        if (t != NULL) t->result = PG_ITCM_BAD_INPUT;
++        return true; /* no TCM access or changes */
++    }
++    t->result = PG_ITCM_ACCESS_UNCERTAIN;
++    /* Called inside the owned bus transaction. Recheck access before GMU MMIO. */
++    if ((pg_read(io, PG_GCC, PG_GCC_AHB) & (PG_CLK_OFF | 1u)) != 1u ||
++        !pg_cx_on(pg_read(io, PG_GPUCC, PG_CX_GDSCR)) ||
++        (pg_read(io, PG_GPUCC, PG_GMU_CLK) & (PG_CLK_OFF | 1u)) != 1u ||
++        (pg_read(io, PG_GPUCC, PG_CXO_CLK) & (PG_CLK_OFF | 1u)) != 1u)
++        return false;
++    hw = pg_read(io, PG_GPUCC, PG_CX_HW);
++    if (hw == 0xffffffffu || !(hw & PG_GDSC_PWR_ON) ||
++        pg_read(io, PG_GPUCC, PG_RCG) != 0 ||
++        (pg_read(io, PG_GPUCC, PG_RCG + 4) & PG_CFG_MASK) != PG_XO_CFG)
++        return false;
++    for (unsigned int i = 0; i < 3; ++i)
++        if ((pg_read(io, PG_GCC, pg_bus_offsets[i]) & (PG_CLK_OFF | 1u)) != 1u)
++            return false;
++    if (!pg_itcm_reset(io, t)) return false;
++    retention = pg_read(io, PG_GMU, PG_RETENTION);
++    pg_report(io, "ITCM retention inherited", retention, 0);
++    if (retention == 0xffffffffu) return false;
++    /* Save and double-check the original contents before any GMU write. */
++    for (unsigned int i = 0; i < PG_WORDS; ++i) {
++        if (!(i & 255u) && !pg_itcm_reset(io, t)) return false;
++        t->saved[i] = pg_read(io, PG_GMU, PG_ITCM + 4u * i);
++    }
++    for (unsigned int i = 0; i < PG_WORDS; ++i) {
++        if (!(i & 255u) && !pg_itcm_reset(io, t)) return false;
++        if (pg_read(io, PG_GMU, PG_ITCM + 4u * i) != t->saved[i]) ++bad;
++    }
++    pg_report(io, "ITCM snapshot stable words/mismatches", PG_WORDS - bad, bad);
++    if (bad) { t->result = PG_ITCM_SNAPSHOT_UNSTABLE; return false; }
++    if (!pg_itcm_reset(io, t)) return false;
++    if (pg_read(io, PG_GMU, PG_RETENTION) != retention) return false;
++    if (!(retention & 1u)) pg_write(io, PG_GMU, PG_RETENTION, retention | 1u);
++    if (pg_read(io, PG_GMU, PG_RETENTION) != (retention | 1u)) {
++        t->result = PG_ITCM_RETENTION_REJECTED;
++        if (pg_itcm_restore_retention(io, t, retention)) return true;
++        if (t->result != PG_ITCM_RESET_UNCERTAIN) t->result = PG_ITCM_RESTORE_FAILED;
++        return false;
++    }
++    if (!pg_itcm_reset(io, t)) return false;
++    for (unsigned int i = 0; i < PG_WORDS; ++i) {
++        if (!(i & 255u) && !pg_itcm_reset(io, t)) return false;
++        t->modified = true;
++        pg_write(io, PG_GMU, PG_ITCM + 4u * i, t->firmware[i]);
++    }
++    bad = 0;
++    for (unsigned int i = 0; i < PG_WORDS; ++i) {
++        uint32_t got;
++        if (!(i & 255u) && !pg_itcm_reset(io, t)) return false;
++        got = pg_read(io, PG_GMU, PG_ITCM + 4u * i);
++        if (got != t->firmware[i]) {
++            if (bad < 4) pg_report(io, "ITCM firmware mismatch index/value", i, got);
++            ++bad;
++        }
++    }
++    pg_report(io, "ITCM firmware verified words/mismatches", PG_WORDS - bad, bad);
++    t->result = bad ? PG_ITCM_MISMATCH_RESTORED : PG_ITCM_OK;
++    if (!pg_itcm_reset(io, t)) return false;
++    if (pg_read(io, PG_GMU, PG_RETENTION) != (retention | 1u)) {
++        t->result = PG_ITCM_RESTORE_FAILED;
++        return false;
++    }
++    for (unsigned int i = 0; i < PG_WORDS; ++i) {
++        if (!(i & 255u) && !pg_itcm_reset(io, t)) return false;
++        pg_write(io, PG_GMU, PG_ITCM + 4u * i, t->saved[i]);
++    }
++    bad = 0;
++    for (unsigned int i = 0; i < PG_WORDS; ++i) {
++        if (!(i & 255u) && !pg_itcm_reset(io, t)) return false;
++        if (pg_read(io, PG_GMU, PG_ITCM + 4u * i) != t->saved[i]) ++bad;
++    }
++    pg_report(io, "ITCM original restored words/mismatches", PG_WORDS - bad, bad);
++    if (bad) { t->result = PG_ITCM_RESTORE_FAILED; return false; }
++    if (!pg_itcm_restore_retention(io, t, retention)) {
++        if (t->result != PG_ITCM_RESET_UNCERTAIN) t->result = PG_ITCM_RESTORE_FAILED;
++        return false;
++    }
++    if (!pg_itcm_reset(io, t)) return false;
++    t->modified = false;
++    pg_report(io, "ITCM transaction restored; CM3 remains reset", retention, t->result);
++    return true;
++}
++static bool pg_itcm_clock_probe(struct pg_io *io, void *arg)
++{ return pg_clock_probe_body(io, true, pg_itcm_transfer, arg); }
++static enum pg_cx_result pg_owned_itcm_test(struct pg_io *io, struct pg_itcm_data *t)
++{
++    if (!pg_itcm_input_valid(t)) {
++        if (t != NULL) t->result = PG_ITCM_BAD_INPUT;
++        pg_report(io, "ITCM invalid buffers/vectors; no power transition", 0, 0);
++        return PG_CX_INPUT_REJECTED;
++    }
++    t->result = PG_ITCM_NOT_RUN;
++    t->modified = false;
++    return pg_cx_cycle_with_probe(io, pg_itcm_clock_probe, t);
++}
++
++
 +/* saved must hold PG_WORDS words; firmware and saved must not alias. */
 +static enum pg_result
 +pg_tcm_test(struct pg_io *io, const uint32_t *firmware, uint32_t *saved)
