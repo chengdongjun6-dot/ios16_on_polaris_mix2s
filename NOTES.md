@@ -1,5 +1,11 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 mode-1 AON probe refinement
+
+- CI `40180263049` for commit `0a208a9` succeeded and compiled 0096; the buildtree log shows `polaris_gmu_tcm_test.c` compiled with warnings only. No image was used because the current working tree then refined the probe.
+- Mode 1 is now strictly AON-only: reads GCC config-AHB, MEMNOC/SNOC/DDR-AXI and GPLL0 vote registers, then exits before mapping or reading GPUCC/GMU. This avoids probing powered-off GPUCC during the first phone test. Mode 2 retains the guarded GPUCC/GMU path and high-memory blob validation.
+- The next CI/image will use `polarisgmutest=1` only. It needs no firmware blob and must leave all GPU domains/GMU/SMMU/GX untouched. The expected result is a persistent `POLARIS GMUTEST` state line, or a bounded early stop; neither outcome claims acceleration.
+
 ## 2026-10-25 0096 CI failure fixed; 0096 regenerated
 
 - RELEASE run `40177674101` failed only because the 0096 patch's new header lacked a valid unified-diff hunk, so CI compiled `polaris_gmu_tcm_test.c` but could not find `polaris_gmu_tcm_test.h`. No image was produced and no phone action occurred. The malformed patch has been regenerated from a clean post-0095 base with a valid header hunk; the old untracked 0097 split patch was removed.
