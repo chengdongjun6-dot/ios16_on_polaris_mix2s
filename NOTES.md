@@ -1,5 +1,13 @@
 # iOS 16 on Polaris (Mi MIX 2S, SDM845), based on ios-sweet - working notes
 
+## 2026-10-25 active: mode-5 XO probe temporarily booted; awaiting readback
+
+- RELEASE/SWEET CI **40192935142** completed **success** at **d3151f4a07596c533c1beca0f8220b376bccc047**. Full ignored log `out/ci-40192935142/ci.log` confirms 0096 applied, source compiled, no own errors and the pre-existing C99 declaration-order warning. Summary `log-review.json` records these checks.
+- Kernel **12318264 B**, SHA-256 **3d13c1774810244538904f2131e18f023d13340ccc92bffd12ea095e23b1e088**, matches artifact SHA256SUMS; mode-5 diagnostic strings verified. Image `out/ci-40192935142/mode5/shim-polaris-gmutest-mode5.img` **18636800 B**, SHA-256 **e9e17e08aed96031fcaf7f451d2cd6821791d5dd97f6a8e8a3b387213b9d0774**. Payload **11758576 B**, SHA-256 **7834e388c72419f57fb94b0b88455717d8f7bd1714c19f705de0c2c8255c0f81**, **2831376 B** below ABL `0xdea000` bound.
+- Original FT0095 image checksum verified; embedded shim/stock DTB reused byte-for-byte, new ramdisk matches payload, ADT roundtrip/board identities and CPU prefix 4/8 pass. Keeps exact FT8716/scaled-display/root args; only adds `polarisgmutest=5`, no firmware. Local builder `out/gpu-20261025/build_mode5_dt.py`.
+- **Temporary boot sent successfully:** verified same single recovery/fastboot Polaris, battery 100%, 31 C. Refreshed baseline still SHA `50be7c9d7671f6164805f50fdbac763739811d55c2484d9f485c74515260bc1b`, total 216522, flush 14 (the completed mode-4 result). `fastboot boot` Sending OKAY **0.390s**, Booting OKAY **0.064s**, total **0.463s**; exact `mode5/phone-boot.log`. No partition flash.
+- **Pending user observation:** async question asks lock-screen/touch status, >=10 seconds for log flush, then recovery return. Do not repeat boot while pending. When recovery confirmed, run `python out/ci-40192935142/mode5/capture_ring.py recovery` then `python out/ci-40192935142/mode5/analyze_readback.py`. Require changed baseline + mode=5 marker; inspect inherited RCG/branches, phase, XO ready, GMU read withheld or SYSRESET, final RCG/branches, CX result and panic/touch evidence. `a=reset-verified=0` is not proof of CM3 reset. XO operation/rollback remain unproven until this readback.
+
 ## 2026-10-25 active: mode-5 source-backed clock probe ready for CI
 
 - Mode-4 hardware result below is complete and positive. Phone remains recovery; user authorizes continued temporary testing. No new phone action after readback yet.
