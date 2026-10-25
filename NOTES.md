@@ -1,5 +1,11 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 FT8716 continuation
+
+- The nested worktree `research/ft-build-remote` is the active Git checkout. Commit `379e931` adds an opt-in FocalTech FT8716 driver for the late Polaris panel variant (I2C 0x38, bit-banged GPIO33/34, reset99, standard 6-byte objects, SweetHID reports). Commit `788f8d2` bounds frame parsing by the reported point count and permits release records without treating zero-filled unused slots as contacts.
+- The phone is currently one ADB target in OrangeFox/TWRP recovery: serial `6d0eff91`, `product=polaris`; no partition was written during this continuation. The existing persistent 0090 Synaptics image/root remains untouched.
+- GitHub network access works through the user's VPN, but Git push is still authenticated as `chengdongjun6-dot` and GitHub returns HTTP 403 for `luuu20309/ios16_on_polaris_mix2s`. The target-account login page is open in Edge; no CI run has been started for 0094. After the user completes target-account login, push branch `polaris-focaltech-0094`, dispatch RELEASE/SWEET XNU workflow, verify the kernel/payload/image hashes and ABL size, then request a new temporary `fastboot boot` test with `polaristouchft=1`. Do not flash boot or userdata for this experiment.
+
 ## Polaris touch handoff (2026-10-20, local Windows workspace)
 
 - **Confirmed hardware fix:** shim TOUCHPROBE originally used TLMM 0x03400000 + pin*0x1000 for all GPIOs. SDM845 has NORTH=+0x500000 (33/34 and reset99), SOUTH=+0x900000 (VDDIO23), EAST=+0x100000 (IRQ125). Fixed in `shim/shim.c` at commit `b549c17`; upstream pinctrl source: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/plain/drivers/pinctrl/qcom/pinctrl-sdm845.c . The original all-address ACK was false because SDA stayed low with wrong TLMM address; no evidence that L28 was off. Do not blindly write PMIC.
