@@ -92,7 +92,8 @@
 GMU/CXO 时钟为 `0x80004220/0x80000001`，RCG 为 `0x80000000`，均未运行。
 这是 XNU 读回结果；日志里仍有一次 PosterBoard sig5，不能声称全部用户态稳定。
 
-现有入口只接受 `polarisgmutest=1/2`：分别为 GCC AON 和只读 CX 状态。
+只读入口为 `polarisgmutest=1/2`：分别为 GCC AON 和只读 CX 状态。
+后续加入独立的 mode 4 电源门实验，见下节。
 mode 3 的 TCM 核心虽存在，启动入口仍将其挡住；不能按旧注释宣称 mode 2 会写 TCM。
 
 这次日志暴露了旧 mode-2 分支将时钟的 bit31=OFF 语义误用于 GDSCR，
@@ -112,14 +113,18 @@ GMU/HFI、PAS13、隔离映射、CP 写回/fence 和 Mesa 呈现仍未在本机 
 它不发送 CX/MX ARC 投票。厂商 `rpmh_regulator_arc_get_voltage_sel` 返回驱动缓存，
 不能把 Recovery 的读数当作 XNU 接手时可以恢复的原始投票。
 
-实现只允许取得初始 PWR_ON=0、SW_COLLAPSE=1、HW_CONTROL=0 的 CX GDSC；
-清除 collapse 位后按本机 DT 等待最多 500us，从 GPUCC 的 `0x1540` 状态别名确认上电。
+实现只允许取得初始 PWR_ON=0、SW_COLLAPSE=1、HW_CONTROL=0、SW_OVERRIDE=0 的 CX GDSC。
+本机最终 DT 的 `qcom,clk-dis-wait-val=8` 对应 GDSCR bits 15:12；XNU 实测继承值为 2。
+按 [厂商 probe](https://github.com/MiCode/Xiaomi_Kernel_OpenSource/blob/c7cb50c18f812629b9620b2b8fa684bc40d82080/drivers/clk/qcom/gdsc-regulator.c#L675)
+先在关闭态设置并读回 8；设置被拒绝时不尝试上电。清除 collapse 位后按本机 DT 等待最多 500us，从 GPUCC 的 `0x1540` 状态别名确认上电。
 仅在两个电源状态一致、GMU 时钟仍未请求且停止时，恢复原 collapse 请求。
-按照 DT `qcom,no-status-check-on-disable` 和厂商 `gdsc_disable` 等待 100us，再记录最终状态。
+按厂商 `gdsc_disable` 先留出 1us memory power-down 等待；写 collapse 后等待 1us，
+再按 DT `qcom,no-status-check-on-disable` 等待 100us，并记录两个电源状态。
+只有二者均确认关闭才恢复原等待值，随后重新检查等待值、电源状态和控制位。
 独立 TZ/HYP 投票若仍保持上电，会单独报告“请求已恢复、域仍开启”，不会强制关闭。
 硬件接管、状态不可读或 GMU 时钟活动时停止并保留当前供电，不能声称完成回退。
 
 没有共享电压、GMU/PLL/时钟、GX、reset、SMMU 或固件写入。
-主机编译实际 C helper，19 个供电故障场景通过；既有 14 个事务场景、六个 CX 读门槛场景
+主机编译实际 C helper，28 个供电/时序故障场景通过；既有 14 个事务场景、六个 CX 读门槛场景
 和内存边界检查也通过。成功结果只证明局部 CX 开关及回退，尚不证明带时钟负载时的供电、
 GMU 执行或图形加速。内核 CI 和临时启动结果持续记录在 `NOTES.md`。
