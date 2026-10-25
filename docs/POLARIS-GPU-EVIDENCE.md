@@ -2,7 +2,8 @@
 
 当前目标是小米 MIX 2S（`polaris`，SDM845 / Adreno 630v2）。`ios-sweet`
 原始目标 SM7150 / A618 的地址和供电参数不能作为本机默认值。
-本次只核对已有本机导出、公开源码和 CI，修正离线解析工具；没有操作手机。
+首次核对阶段只读取已有本机导出、公开源码和 CI，修正离线解析工具。
+随后用户授权临时测试，已启动下述只读 CX 探针；逐次结果见 `NOTES.md`。
 
 ## 依据与适用范围
 
@@ -83,7 +84,10 @@
 
 `059bc5b` 的 RELEASE CI [40185293459](https://github.com/chengdongjun6-dot/ios16_on_polaris_mix2s/actions/runs/40185293459)
 已成功；完整日志确认 0096 应用、`polaris_gmu_tcm_test.c` 编译和内核产出。
-这是已存在的 CI，本次没有新触发构建，也没有下载/打包/启动它的内核。
+这是已存在的 CI，无需重建。随后已下载并核对内核 SHA-256
+`4d1190db841d9eaf20a6a2bb3923d397b0285a68c733af374d83f6496bedf6e0`，
+保留 FT0095 shim/DTB/触摸配置打包 mode 2，经用户授权临时启动。
+`fastboot boot` 返回 OKAY；XNU CX 状态、锁屏和触摸仍等待本次屏幕观察及日志。
 
 现有入口只接受 `polarisgmutest=1/2`：分别为 GCC AON 和只读 CX 状态。
 mode 3 的 TCM 核心虽存在，启动入口仍将其挡住；不能按旧注释宣称 mode 2 会写 TCM。
