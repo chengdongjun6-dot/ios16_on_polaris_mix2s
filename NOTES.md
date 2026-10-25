@@ -1,5 +1,11 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 mode-1 boot blocked by USB disappearance
+
+- Mode-1 image was fully preflighted and ready: `out/ci-40181241335/mode1/shim-polaris-gmutest-mode1.img`, SHA-256 `b06147e04ab4d418c23e59edd7bd7fb4bc1aaf53c09c531018ce0a7f8220bd0c`. It adds only `polarisgmutest=1` to the verified 0095 payload and does not append firmware.
+- Before any `adb reboot bootloader`, the recovery device disappeared: `adb devices` and `fastboot devices` were both empty. The scripted test stopped at its initial recovery-device assertion, so it did not reboot, send the image, or write a partition. ADB server restart and Windows USB PnP refresh still showed no Xiaomi/Android device.
+- The phone must reappear in OrangeFox/TWRP ADB before the mode-1 temporary boot can be attempted. Preserve the 0095 fallback and do not use `fastboot boot` without rechecking exactly one `polaris` target and image SHA.
+
 ## 2026-10-25 0096 RELEASE build and read-only mode-1 image prepared
 
 - RELEASE/SWEET Actions **40181241335** succeeded at commit `d9bfa8c15d836b6407fd0eb995485f696de2dc4a`. XNU patch 0096 applied; `polaris_gmu_tcm_test.c` compiled with only a C99 declaration-order warning. Kernel is 12,301,864 bytes, SHA-256 `656a9b917b123e6ebbecbb24e0d2ef0998fbbe5c838a5f7a0f247d04220d2a6b`; binary has `POLARIS GMUTEST` and FT8716 strings.
