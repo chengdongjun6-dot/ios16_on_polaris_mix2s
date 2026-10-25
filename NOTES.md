@@ -1,5 +1,12 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 restore known-working FT0095 baseline before GPU (active)
+
+- User explicitly prioritizes restoring boot with working touch, then GPU. Reused the exact original FT0095 scaled-display image from successful CI `40157852186`, which the user had confirmed reached iOS with FocalTech touch before native-geometry/quiet trials. No new build and no Apple binary or root configuration edits.
+- Preflight: exact image SHA-256 `c42ece543ae55d3c9969f7b72fea4839f6cfb950c71e035f6a568c9925d83220`; payload `034e7cf0874d5c89cee90b9870d8d2292b41dbec5d615fd346e335c84f3fb828`; kernel `55e116460ccc015819436d794a3b1c7b64e5ca48353c3a5171ddd8eca4c2d010`. Embedded ramdisk equals verified payload, Polaris/SDM845 ADT verified, ABL headroom 2,831,488 bytes. Args retain `cpus=4`, FT=1/Synaptics=0, `sweetfb_polaris=1`, `sweetfb_hz=30`, `-enable_kprintf_spam`, console mute on first swap. No native geometry, 0096 software-vsync override or GPU opt-in.
+- One recovery device verified as Polaris; battery 100%, temperature 29 C before reboot. `adb reboot bootloader`, reverified single fastboot target/product, then `fastboot boot out/ci-40157852186/shim-polaris-ft0095.img`: Sending OKAY 0.391 s, Booting OKAY 0.063 s, total 0.462 s. Private record: `out/ci-40157852186/return-ft0095-20261025.log`. No partition flash. Normal XNU runtime uses the existing writable userdata root/log, so this is not a rollback of persisted userspace data.
+- **Pending:** user must observe lock screen and actual touch on THIS run. Bootloader acceptance alone does not establish recovery of userspace/touch or resolution of PosterBoard. Original black side bars/stutter are temporarily acceptable per priority; do not repeat boot or switch images before user reports. If the baseline still stalls, retrieve its ring/IPS reports from recovery and compare with the previous quiet/native run. GPU implementation starts after this baseline is confirmed; preserve FT0095/CPU framebuffer fallback.
+
 ## 2026-10-25 user steering: defer frame rate, prioritize display stability then GPU
 
 - User asked to defer frame-rate changes and asked about GPU acceleration after fixing the display. Do not deploy or boot 0096. Its source commit `a0c6b4e` remains available as an optional experiment; Actions run `40173669913` is confirmed `completed/cancelled`. No image generated/downloaded or booted for 0096.
