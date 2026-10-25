@@ -138,3 +138,28 @@ HW 状态同时为 `0x80001fe0`；随后关闭并恢复到原值 `0x00222001`，
 最终 HW 状态 `0x00005ff4`。GMU 时钟全程未启用。用户确认锁屏和触摸正常；
 新日志明确为 mode 4、result=0。该结果仅证明当前继承供电条件下的局部电源门和时序恢复。
 下一阶段是按厂商 RCG/branch 语义验证 XO 时钟及 CM3 复位状态，再恢复时钟与 CX。
+
+
+## 后续 mode 5：XO 时钟与有条件的 CM3 状态读取
+
+mode 5 在已验证的 CX 周期内部执行，默认不启用。依据固定 MiCode 提交 `c7cb50c18f81`：
+
+- `gpucc-sdm845.c:220-245` 的 v2 频率表支持 XO 19.2 MHz，parent selector=0，HID=1。
+  `:414-429` / `:458-469` 给出 CX GMU / CXO 的 CBCR `0x1098` / `0x109c`。
+- 同文件 `:820-824` 把 GMU sleep/wake 字段 bits 11:4 都设置为 15；探针保存旧值，
+  只在分支关闭时设置，回退时在确认分支关闭后恢复。
+- [clk-rcg2.c](https://github.com/MiCode/Xiaomi_Kernel_OpenSource/blob/c7cb50c18f812629b9620b2b8fa684bc40d82080/drivers/clk/qcom/clk-rcg2.c#L492)
+  的 safe-config 先 force-enable root，再配置/等待 UPDATE，最后撤销 force。
+  探针只接受空闲、未强制开启、XO parent、无硬件控制的原配置；不取得 PLL 或新电压投票。
+  ROOT_OFF、UPDATE 和分支状态按厂商 500 次 / 1us 轮询；超时为失败。
+- 恢复顺序是 GMU 分支停止、RCG 原配置和强制位恢复、撤销自己新增的 CXO enable、
+  GMU sleep/wake 恢复，最后才允许 CX collapse。继承的 CXO request 保留。
+  活动/未知资源、无法确认的 CM3 reset、时钟恢复失败均保留 CX，并明确报告失败。
+- 本机 GMU DT 包含 AXI/MEMNOC；同机 Polaris 0138 还打开 SNOC。
+  不能从 core clock ready 推断 GMU 总线可达。本次不写 GCC；只有这三项状态均显示运行，
+  才读取一次 CM3 SYSRESET `GMU+0x14000`。否则记录总线未确认并恢复时钟。
+  不写 GMU、复位、固件、GX、SMMU 或 PAS；mode 3 仍不可由启动参数启用。
+
+24 个实际 C helper + CX 外层事务场景通过，覆盖各阶段故障、三个独立总线门槛、
+未复位/不可读 CM3、继承 CXO、无关字段变化和回退失败。该实现尚需 CI 和真机验证；
+mode 4 的成功不替代带时钟负载的验证。

@@ -1,5 +1,14 @@
 # iOS 16 on Polaris (Mi MIX 2S, SDM845), based on ios-sweet - working notes
 
+## 2026-10-25 active: mode-5 source-backed clock probe ready for CI
+
+- Mode-4 hardware result below is complete and positive. Phone remains recovery; user authorizes continued temporary testing. No new phone action after readback yet.
+- Added default-off `polarisgmutest=5`: reuses the tested CX transaction, configures/restores GMU branch sleep/wake fields, performs vendor safe-config RCG force/update/unforce for XO only, enables CXO/GMU branches with bounded polls, restores each owned field before CX collapse. Refuses inherited active/non-XO/hardware-controlled RCG state. No PLL/ARC/GCC/GMU/reset/firmware/SMMU/PAS/GX writes; mode 3 remains gated off. On uncertain ownership, reset!=1, or restore failure leaves clocks/CX available and reports held-on instead of false rollback.
+- Source rechecked: pinned MiCode `gpucc-sdm845.c:220-245,414-429,458-469,820-824`; freshly fetched `clk-rcg2.c:109-175,492-565`, `clk-branch.c:65-140`, and same-device Polaris 0138 sequence. Raw public copies are ignored in `out/gpu-route-sources-20261025`. Existing mode-3 helper does not have these extra clock safeguards and remains unreachable; do not enable it.
+- **GMU bus gate:** actual prior GCC MEMNOC/SNOC are off. Even after XO clocks become ready, mode 5 withholds CM3 read unless MEMNOC/SNOC/DDR AXI all show running; then it would read only SYSRESET. Expected on this phone is clock evidence with GMU read withheld, followed by full restoration. Do not claim reset verified when `clock probe restored (a=reset-verified)` has a=0.
+- Validation: **24 clock/CX fault scenarios** (actual C helper, WSL cc `-Wall -Wextra -Werror`) pass, plus previous **28 CX**, **14 TCM + six CX gates and bounds**, and four firmware parser tests. Patch apply against clean post-0095 base and whitespace checks pass. Log phases identify failed stages; new register/status values remain unobserved until phone test.
+- Next: commit/push and run one RELEASE/SWEET CI, inspect logs, verify artifact/hash, package mode 5 with the exact FT0095 wrapper/ADT/touch args and no firmware, save fresh baseline, temporary `fastboot boot`. Collect user screen observation and changed recovery ring; no destructive operation is authorized here.
+
 ## 2026-10-25 active: mode-4 CX on/off and timing restore proven on phone
 
 - User confirms new mode-4 image reached iOS lock screen with normal touch and returned to recovery. Verified one recovery Polaris, battery 100%, 32 C. Read only the last 1025 userdata blocks; private `out/ci-40191126435/mode4/recovery-ring.bin` / `.txt`, total **216522 bytes**, flush **14**, SHA-256 **50be7c9d7671f6164805f50fdbac763739811d55c2484d9f485c74515260bc1b**. Ring differs from baseline and explicitly reports mode=4, so this is fresh test evidence.

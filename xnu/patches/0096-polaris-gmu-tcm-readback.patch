@@ -1,9 +1,9 @@
 --- /dev/null
 +++ b/bsd/dev/polaris_gmu_tcm_test.c
-@@ -0,0 +1,153 @@
+@@ -0,0 +1,159 @@
 +/* Optional Polaris A630 GMU ITCM test. CPU scanout and FT8716 stay active.
 + * polarisgmutest=1: GCC AON; =2: read-only CX status.
-+ * =4: bounded local CX GDSC cycle; mode 3 TCM remains gated off.
++ * =4: local CX cycle; =5: CX + XO clock/reset-state probe. Mode 3 stays off.
 + * No firmware start or GPU acceleration.
 + */
 +#if defined(ARM64_BOARD_CONFIG_SWEET)
@@ -123,8 +123,14 @@
 +        (void)pg_cx_status(&io);
 +        goto done;
 +    }
-+    if (pg_mode == 4) {
-+        enum pg_cx_result cx_result = pg_cx_cycle(&io);
++    if (pg_mode == 4 || pg_mode == 5) {
++        enum pg_cx_result cx_result;
++        if (pg_mode == 5) {
++            maps.gmu = ml_io_map(0x0506a000, 0x30000);
++            if (!maps.gmu) goto done;
++        }
++        cx_result = pg_mode == 5 ? pg_cx_cycle_with_probe(&io, pg_clock_probe) :
++            pg_cx_cycle(&io);
 +        printf("POLARIS GMUTEST: CX cycle result=%u (0=on-and-restored, 1=AHB-off, 2=busy, 3=no-power-ACK, 4=restore-failed, 5=held-on, 6=vote-restored-still-on, 7=timing-rejected)\n",
 +               (unsigned int)cx_result);
 +        goto done;
@@ -137,7 +143,7 @@
 +    printf("POLARIS GMUTEST: result=%u %s\n", (unsigned int)result, result_name[result]);
 +done:
 +    if (saved != NULL) kfree_data(saved, PG_WORDS * sizeof(uint32_t));
-+    printf("POLARIS GMUTEST: done; no firmware start, SMMU/PAS/GX untouched; CPU display retained\n");
++    printf("POLARIS GMUTEST: done; no reset/firmware/SMMU/PAS/GX writes; CPU display retained\n");
 +    (void)thread_terminate(current_thread());
 +    thread_block(THREAD_CONTINUE_NULL);
 +}
@@ -147,7 +153,7 @@
 +    thread_t thread;
 +    if (pg_started || !polaris_touch_i2c_board()) return;
 +    (void)PE_parse_boot_argn("polarisgmutest", &pg_mode, sizeof(pg_mode));
-+    if (pg_mode != 1 && pg_mode != 2 && pg_mode != 4) return;
++    if (pg_mode != 1 && pg_mode != 2 && pg_mode != 4 && pg_mode != 5) return;
 +    pg_started = true;
 +    if (kernel_thread_start(pg_thread, NULL, &thread) == KERN_SUCCESS)
 +        thread_deallocate(thread);
@@ -156,10 +162,10 @@
 +#endif
 --- /dev/null
 +++ b/bsd/dev/polaris_gmu_tcm_test.h
-@@ -0,0 +1,321 @@
+@@ -0,0 +1,483 @@
 +/* Polaris GMU ITCM experiment, shared with host fault-injection tests.
 + * Register facts: MiCode c7cb50c18f81 gpucc-sdm845.c/adreno_a6xx.c.
-+ * Mode 4 may cycle only the local CX GDSC. Does not vote shared rails,
++ * Mode 4 cycles CX; mode 5 probes XO clocks and reads CM3 reset. No shared rails,
 + * release CM3 reset, touch SMMU, or submit GPU work.
 + */
 +#ifndef POLARIS_GMU_TCM_TEST_H
@@ -238,7 +244,8 @@
 +    PG_CX_RESTORE_FAILED, PG_CX_HELD_ON, PG_CX_VOTE_RESTORED_ON,
 +    PG_CX_CONFIG_FAILED
 +};
-+static enum pg_cx_result pg_cx_cycle(struct pg_io *io)
++static enum pg_cx_result
++pg_cx_cycle_with_probe(struct pg_io *io, bool (*probe)(struct pg_io *))
 +{
 +    uint32_t before, now, hw = 0, clock;
 +    bool powered = false, timing_changed;
@@ -298,6 +305,7 @@
 +        if (clock == 0xffffffffu || (clock & 1u) || !(clock & PG_CLK_OFF))
 +            return PG_CX_HELD_ON;
 +        io->wait_us(io->ctx, 2); /* staggered memory power-up delay */
++        if (probe != NULL && !probe(io)) return PG_CX_HELD_ON;
 +        result = PG_CX_RESTORED;
 +    }
 +    now = pg_read(io, PG_GPUCC, PG_CX_GDSCR);
@@ -337,6 +345,8 @@
 +    pg_report(io, "CX cycle final GDSCR", before, now);
 +    return result;
 +}
++static enum pg_cx_result pg_cx_cycle(struct pg_io *io)
++{ return pg_cx_cycle_with_probe(io, NULL); }
 +static bool pg_poll(struct pg_io *io, enum pg_block b, uint32_t o,
 +                    uint32_t mask, uint32_t expected)
 +{
@@ -358,6 +368,164 @@
 +    pg_write(io, PG_GPUCC, PG_RCG, pg_read(io, PG_GPUCC, PG_RCG) | 1u);
 +    return pg_poll(io, PG_GPUCC, PG_RCG, 1u, 0) &&
 +        (pg_read(io, PG_GPUCC, PG_RCG + 4) & PG_CFG_MASK) == (fields & PG_CFG_MASK);
++}
++/* MiCode c7cb50c18f81: gpucc-sdm845.c:220-245,414-429,458-469,820-824;
++ * clk-rcg2.c:109-175,492-565 and clk-branch.c:65-140. The XO parent is
++ * always on while APPS is online. Refuse other parents or inherited use.
++ * Unlike the vendor warning-only RCG path, every timeout fails closed.
++ */
++#define PG_ROOT_OFF (1u << 31)
++#define PG_ROOT_EN 2u
++#define PG_RCG_RO (PG_ROOT_OFF | 0xf0u)
++#define PG_CBCR_RO 0xf0000000u
++#define PG_GMU_WAIT_MASK 0xff0u
++#define PG_CFG_NON_XO (0x3700u | (1u << 20))
++static bool pg_clk_poll(struct pg_io *io, uint32_t off, uint32_t mask, uint32_t val)
++{
++    for (unsigned int us = 0; us < 500; ++us) {
++        uint32_t got = pg_read(io, PG_GPUCC, off);
++        if (got == 0xffffffffu) return false;
++        if ((got & mask) == val) return true;
++        io->wait_us(io->ctx, 1);
++    }
++    return false;
++}
++static bool pg_clk_mask(struct pg_io *io, uint32_t off, uint32_t mask, uint32_t val)
++{
++    uint32_t now = pg_read(io, PG_GPUCC, off);
++    uint32_t ro = off == PG_RCG ? PG_RCG_RO :
++        (off == PG_GMU_CLK || off == PG_CXO_CLK) ? PG_CBCR_RO : 0;
++    if (now == 0xffffffffu) return false;
++    pg_write(io, PG_GPUCC, off, (now & ~(mask | ro)) | (val & mask));
++    return true;
++}
++static bool pg_clk_force(struct pg_io *io, bool on)
++{
++    if (!pg_clk_mask(io, PG_RCG, PG_ROOT_EN, on ? PG_ROOT_EN : 0)) return false;
++    return pg_clk_poll(io, PG_RCG, PG_ROOT_EN | PG_ROOT_OFF,
++                       on ? PG_ROOT_EN : PG_ROOT_OFF);
++}
++static bool pg_clk_config(struct pg_io *io, uint32_t cfg)
++{
++    if (!pg_clk_mask(io, PG_RCG + 4, PG_CFG_MASK, cfg) ||
++        !pg_clk_mask(io, PG_RCG, 1u, 1u)) return false;
++    return pg_clk_poll(io, PG_RCG, 1u, 0) &&
++        (pg_read(io, PG_GPUCC, PG_RCG + 4) & PG_CFG_MASK) == (cfg & PG_CFG_MASK);
++}
++/* True permits the enclosing owned CX cycle to collapse. False leaves the
++ * domain available because clock ownership/restoration is uncertain.
++ */
++static bool pg_clock_probe(struct pg_io *io)
++{
++    uint32_t gmu, cxo, cfg, cmd, reset, phase = 1;
++    bool timing = false, force = false, configured = false;
++    bool cxo_owned = false, gmu_owned = false, verified = false;
++    if (!pg_cx_on(pg_read(io, PG_GPUCC, PG_CX_GDSCR)) ||
++        !(pg_read(io, PG_GPUCC, PG_CX_HW) & PG_GDSC_PWR_ON)) return false;
++    gmu = pg_read(io, PG_GPUCC, PG_GMU_CLK);
++    cxo = pg_read(io, PG_GPUCC, PG_CXO_CLK);
++    cmd = pg_read(io, PG_GPUCC, PG_RCG);
++    cfg = pg_read(io, PG_GPUCC, PG_RCG + 4);
++    pg_report(io, "clock probe inherited branches", gmu, cxo);
++    pg_report(io, "clock probe inherited RCG", cmd, cfg);
++    /* ROOT_OFF excludes active downstream consumers, including GX GMU.
++     * Only an idle, unforced XO source can be acquired without PLL votes.
++     */
++    if (gmu == 0xffffffffu || cxo == 0xffffffffu ||
++        (gmu & 1u) || !(gmu & PG_CLK_OFF) || cmd != PG_ROOT_OFF ||
++        (cfg & PG_CFG_NON_XO)) {
++        pg_report(io, "clock probe busy; CX retained", cmd, cfg);
++        return false;
++    }
++    if ((gmu & PG_GMU_WAIT_MASK) != PG_GMU_WAIT_MASK) {
++        timing = true;
++        if (!pg_clk_mask(io, PG_GMU_CLK, PG_GMU_WAIT_MASK, PG_GMU_WAIT_MASK)) goto held;
++        if ((pg_read(io, PG_GPUCC, PG_GMU_CLK) &
++             (PG_GMU_WAIT_MASK | PG_CLK_OFF | 1u)) !=
++            (PG_GMU_WAIT_MASK | PG_CLK_OFF)) goto restore;
++    }
++    pg_report(io, "clock probe branch timing", gmu, pg_read(io, PG_GPUCC, PG_GMU_CLK));
++    phase = 2;
++    force = true;
++    if (!pg_clk_force(io, true)) goto restore;
++    phase = 3;
++    configured = true;
++    if (!pg_clk_config(io, PG_XO_CFG)) goto restore;
++    phase = 4;
++    if (!pg_clk_force(io, false)) goto restore;
++    force = false;
++    phase = 5;
++    if (!(cxo & 1u)) {
++        cxo_owned = true;
++        if (!pg_clk_mask(io, PG_CXO_CLK, 1u, 1u)) goto held;
++    }
++    if (!pg_clk_poll(io, PG_CXO_CLK, PG_CLK_OFF | 1u, 1u)) goto restore;
++    phase = 6;
++    gmu_owned = true;
++    if (!pg_clk_mask(io, PG_GMU_CLK, 1u, 1u)) goto held;
++    if (!pg_clk_poll(io, PG_GMU_CLK, PG_CLK_OFF | 1u, 1u)) goto restore;
++    pg_report(io, "clock probe XO ready", pg_read(io, PG_GPUCC, PG_GMU_CLK),
++              pg_read(io, PG_GPUCC, PG_CXO_CLK));
++    pg_report(io, "clock probe XO RCG", pg_read(io, PG_GPUCC, PG_RCG),
++              pg_read(io, PG_GPUCC, PG_RCG + 4));
++    phase = 7;
++    /* MiCode GMU DT and Polaris 0138 also prepare AXI/MEMNOC/SNOC.
++     * Do not infer GMU bus reachability from the core clock alone.
++     * This mode never acquires or writes those GCC clocks.
++     */
++    if ((pg_read(io, PG_GCC, PG_GCC_MEMNOC) |
++         pg_read(io, PG_GCC, PG_GCC_SNOC) |
++         pg_read(io, PG_GCC, PG_GCC_DDR_AXI)) & PG_CLK_OFF) {
++        pg_report(io, "clock probe GMU read withheld; bus clocks not confirmed", 0, 0);
++        goto restore;
++    }
++    /* Only GMU read in this mode. Do not infer reset from a log label. */
++    reset = pg_read(io, PG_GMU, PG_RESET);
++    pg_report(io, "clock probe CM3 SYSRESET", reset, 0);
++    if (reset != 1u) {
++        pg_report(io, "clock probe reset not confirmed; clocks/CX retained", reset, 0);
++        return false;
++    }
++    verified = true;
++restore:
++    pg_report(io, "clock probe restore begins (a=phase)", phase, verified ? 1u : 0u);
++    if (gmu_owned) {
++        if (!pg_clk_mask(io, PG_GMU_CLK, 1u, 0)) goto held;
++        if (!pg_clk_poll(io, PG_GMU_CLK, PG_CLK_OFF | 1u, PG_CLK_OFF)) goto held;
++    }
++    if (configured) {
++        /* Do not issue another update while the preceding one is pending. */
++        cmd = pg_read(io, PG_GPUCC, PG_RCG);
++        if (cmd == 0xffffffffu || (cmd & 1u)) goto held;
++        force = true;
++        if (!pg_clk_force(io, true) || !pg_clk_config(io, cfg)) goto held;
++    }
++    if (force) {
++        if (!pg_clk_force(io, false)) goto held;
++    }
++    if (cxo_owned) {
++        if (!pg_clk_mask(io, PG_CXO_CLK, 1u, 0)) goto held;
++        if (!pg_clk_poll(io, PG_CXO_CLK, PG_CLK_OFF | 1u, PG_CLK_OFF)) goto held;
++    }
++    if (timing) {
++        if ((pg_read(io, PG_GPUCC, PG_GMU_CLK) & (PG_CLK_OFF | 1u)) != PG_CLK_OFF)
++            goto held;
++        if (!pg_clk_mask(io, PG_GMU_CLK, PG_GMU_WAIT_MASK, gmu)) goto held;
++    }
++    cmd = pg_read(io, PG_GPUCC, PG_RCG);
++    if (cmd != PG_ROOT_OFF ||
++        (pg_read(io, PG_GPUCC, PG_RCG + 4) & PG_CFG_MASK) != (cfg & PG_CFG_MASK) ||
++        (pg_read(io, PG_GPUCC, PG_GMU_CLK) & (PG_CLK_OFF | PG_GMU_WAIT_MASK | 1u)) !=
++            (gmu & (PG_CLK_OFF | PG_GMU_WAIT_MASK | 1u)) ||
++        (pg_read(io, PG_GPUCC, PG_CXO_CLK) & 1u) != (cxo & 1u)) goto held;
++    pg_report(io, "clock probe final RCG", cmd, pg_read(io, PG_GPUCC, PG_RCG + 4));
++    pg_report(io, "clock probe final branches", pg_read(io, PG_GPUCC, PG_GMU_CLK),
++              pg_read(io, PG_GPUCC, PG_CXO_CLK));
++    pg_report(io, "clock probe restored (a=reset-verified)", verified ? 1u : 0u, 0);
++    return true;
++held:
++    pg_report(io, "clock probe restore failed; CX retained", 0, 0);
++    return false;
 +}
 +/* saved must hold PG_WORDS words; firmware and saved must not alias. */
 +static enum pg_result
