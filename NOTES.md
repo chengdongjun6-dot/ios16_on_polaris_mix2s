@@ -1,5 +1,12 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 0096 RELEASE build and read-only mode-1 image prepared
+
+- RELEASE/SWEET Actions **40181241335** succeeded at commit `d9bfa8c15d836b6407fd0eb995485f696de2dc4a`. XNU patch 0096 applied; `polaris_gmu_tcm_test.c` compiled with only a C99 declaration-order warning. Kernel is 12,301,864 bytes, SHA-256 `656a9b917b123e6ebbecbb24e0d2ef0998fbbe5c838a5f7a0f247d04220d2a6b`; binary has `POLARIS GMUTEST` and FT8716 strings.
+- First read-only test image `out/ci-40181241335/mode1/shim-polaris-gmutest-mode1.img` is 18,636,800 bytes, SHA-256 `b06147e04ab4d418c23e59edd7bd7fb4bc1aaf53c09c531018ce0a7f8220bd0c`. Payload is 11,758,560 bytes, SHA-256 `bcd2061285be09e1514ad27ce79ff8fbccc96351d5c5fb17b913e8794c9e9c9d`, leaving 2,831,392 bytes below ABL's `0xdea000` limit. It reuses the exact known FT0095 shim kernel+DTB and userdata-root args; only adds `polarisgmutest=1`. AON-only source exits before GPUCC/GMU; no GPU-GMU firmware blob is appended. Packed ramdisk byte-compared and ADT roundtrip parsed successfully.
+- Device still observed in recovery before this boot. Next authorized action is one temporary `fastboot boot` mode-1 test. After reaching lock screen, leave it idle at least 10s so SWEET ring flush can persist the GCC status, then ask the user to return to recovery; capture only the last-block SWEET ring read-only. This does not touch GPUCC, GMU, rails, firmware, SMMU, PAS or CP and is not GPU acceleration.
+- Mode 2 remains default-off and is not part of this image. The prior low-memory ADT check was corrected; current 0095 uses `dram-base=0x100000000`, `dram-size=0x7cc00000`. The user-verified FT0095 image remains the rollback.
+
 ## 2026-10-25 mode-1 AON probe refinement
 
 - CI `40180263049` for commit `0a208a9` succeeded and compiled 0096; the buildtree log shows `polaris_gmu_tcm_test.c` compiled with warnings only. No image was used because the current working tree then refined the probe.
