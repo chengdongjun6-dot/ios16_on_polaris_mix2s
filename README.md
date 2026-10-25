@@ -1,5 +1,6 @@
 # iOS 16 on Xiaomi Mi MIX 2S (`polaris`)
-
+敦泰屏用户可以使用这个分支，astra对敦泰的触摸问题进行了修正
+我不会用Github也不会写代码 这堆玩意都是opus5-5和astra搞出来的，侵删
 [简体中文](#简体中文) · [English](#english) · [开发记录](<NOTES.md>)
 
 > **实验性 Mi MIX 2S 项目，非日用系统。** 截至 2026-10-23；没有此次更新后的真机测试。
