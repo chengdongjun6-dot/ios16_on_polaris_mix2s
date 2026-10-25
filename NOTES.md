@@ -1,5 +1,12 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 mode-2 CX read-only probe boot (awaiting user screen report)
+
+- RELEASE/SWEET CI **40183764858** succeeded at commit `8c73857ea761a6af1ffd9e6ac39f6e9bcffb0b72`. 0096 compiled/applied. Kernel size 12,301,864 B, SHA-256 `7a65fc238088d6bde84a022a1379e312f7db0b7366f1890ec5b8bb49e94761c9`.
+- Temporary mode-2 image `out/ci-40183764858/mode2/shim-polaris-gmutest-mode2.img`, size 18,636,800 B, SHA-256 `6be7105411b234715c2a02aeeb018f0a0f2369b1debcaca8ba72e68eef12b4a5`. Payload 11,758,560 B SHA-256 `d2671277a5d48c1c8511214ae079bf722c0d8410f775de99a4db9a262e74702f`, 2,831,392 B below ABL limit. Exact 0095 shim kernel+stock DTB retained; payload boot arg is only `polarisgmutest=2` additional flag.
+- Recovery device `6d0eff91`, product `polaris`, battery 100%, temperature 31 C preboot. `fastboot boot` Sending OKAY 0.392 s / Booting OKAY 0.064 s / total 0.464 s. **No partition flashed.** The AON status line exists but GPUCC/GDSCR power-state and resulting branch remain unobserved until user confirms screen/lock/touch. Do not issue another boot or return-to-recovery action before user report.
+- Mode 2 first checks GCC AHB; if off, stops. If on, it maps GPUCC only to read CX GDSCR. If CX status says off, it logs and exits before every further GPUCC/GMU access. If on, it reads CX HW control and inherited GMU/CXO clocks and RCG; no writes, no firmware, no TCM test.
+
 ## 2026-10-25 AON state captured; add guarded read-only CX status
 
 - User confirmed the mode-1 probe returned to recovery and the phone remained usable. Read-only ring `out/ci-40181241335/mode1/recovery-ring.txt`: total 232,247 bytes, flush #28. Boot args include `polarisgmutest=1`; XNU reached SpringBoard, FT8716 produced many HID down/up events, and one PosterBoard breakpoint remains. The probe logged `cfg_ahb=0x00000001`, `memnoc=0x80004220`, `snoc=0x80000001`, `ddr_axi=0`, `pll_vote=0x01601d7b`. Per the bit31 halt conventions, the MEMNOC/SNOC readbacks are halted; do not infer PLL ownership or issue a vote from this snapshot.
