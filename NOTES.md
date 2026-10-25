@@ -1,5 +1,11 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 AON state captured; add guarded read-only CX status
+
+- User confirmed the mode-1 probe returned to recovery and the phone remained usable. Read-only ring `out/ci-40181241335/mode1/recovery-ring.txt`: total 232,247 bytes, flush #28. Boot args include `polarisgmutest=1`; XNU reached SpringBoard, FT8716 produced many HID down/up events, and one PosterBoard breakpoint remains. The probe logged `cfg_ahb=0x00000001`, `memnoc=0x80004220`, `snoc=0x80000001`, `ddr_axi=0`, `pll_vote=0x01601d7b`. Per the bit31 halt conventions, the MEMNOC/SNOC readbacks are halted; do not infer PLL ownership or issue a vote from this snapshot.
+- Added a second default-off read-only mode: `polarisgmutest=2` checks config AHB, reads GPUCC CX GDSCR, and if it reports off stops immediately without reading more GPUCC registers or mapping GMU. Only when the CX power-status bit reports on does it read CX hardware control and GMU/CXO clock + RCG state. Mode 1 remains strictly GCC AON-only; TCM experiment moved to mode 3. No GPU register writes or firmware access in modes 1/2.
+- Host transaction tests remain 14/14 plus blob-range checks; 0096 diff validated against post-0095 tree. Next: build 0096 RELEASE, package `polarisgmutest=2` over the exact 0095 wrapper, verify hashes/size/ramdisk before the single temporary boot. If the GDSCR reports off, stop and design RPMh/GDSC power ownership separately; do not attempt TCM load.
+
 ## 2026-10-25 mode-1 boot blocked by USB disappearance
 
 - Mode-1 image was fully preflighted and ready: `out/ci-40181241335/mode1/shim-polaris-gmutest-mode1.img`, SHA-256 `b06147e04ab4d418c23e59edd7bd7fb4bc1aaf53c09c531018ce0a7f8220bd0c`. It adds only `polarisgmutest=1` to the verified 0095 payload and does not append firmware.
@@ -10,14 +16,14 @@
 
 - RELEASE/SWEET Actions **40181241335** succeeded at commit `d9bfa8c15d836b6407fd0eb995485f696de2dc4a`. XNU patch 0096 applied; `polaris_gmu_tcm_test.c` compiled with only a C99 declaration-order warning. Kernel is 12,301,864 bytes, SHA-256 `656a9b917b123e6ebbecbb24e0d2ef0998fbbe5c838a5f7a0f247d04220d2a6b`; binary has `POLARIS GMUTEST` and FT8716 strings.
 - First read-only test image `out/ci-40181241335/mode1/shim-polaris-gmutest-mode1.img` is 18,636,800 bytes, SHA-256 `b06147e04ab4d418c23e59edd7bd7fb4bc1aaf53c09c531018ce0a7f8220bd0c`. Payload is 11,758,560 bytes, SHA-256 `bcd2061285be09e1514ad27ce79ff8fbccc96351d5c5fb17b913e8794c9e9c9d`, leaving 2,831,392 bytes below ABL's `0xdea000` limit. It reuses the exact known FT0095 shim kernel+DTB and userdata-root args; only adds `polarisgmutest=1`. AON-only source exits before GPUCC/GMU; no GPU-GMU firmware blob is appended. Packed ramdisk byte-compared and ADT roundtrip parsed successfully.
-- Device still observed in recovery before this boot. Next authorized action is one temporary `fastboot boot` mode-1 test. After reaching lock screen, leave it idle at least 10s so SWEET ring flush can persist the GCC status, then ask the user to return to recovery; capture only the last-block SWEET ring read-only. This does not touch GPUCC, GMU, rails, firmware, SMMU, PAS or CP and is not GPU acceleration.
+- Device still observed in recovery before this boot. Next authorized action is one temporary `fastboot boot` mode-1 test. After reaching lock screen, leave it idle at least 10s so SWEET ring flush can persist the GCC status, then ask the user to return to recovery; capture only the last-block SWEET ring read-only. Mode 1 did not touch GPUCC, GMU, rails, firmware, SMMU, PAS or CP and is not GPU acceleration. Mode 2 is also read-only.
 - Mode 2 remains default-off and is not part of this image. The prior low-memory ADT check was corrected; current 0095 uses `dram-base=0x100000000`, `dram-size=0x7cc00000`. The user-verified FT0095 image remains the rollback.
 
 ## 2026-10-25 mode-1 AON probe refinement
 
 - CI `40180263049` for commit `0a208a9` succeeded and compiled 0096; the buildtree log shows `polaris_gmu_tcm_test.c` compiled with warnings only. No image was used because the current working tree then refined the probe.
 - Mode 1 is now strictly AON-only: reads GCC config-AHB, MEMNOC/SNOC/DDR-AXI and GPLL0 vote registers, then exits before mapping or reading GPUCC/GMU. This avoids probing powered-off GPUCC during the first phone test. Mode 2 retains the guarded GPUCC/GMU path and high-memory blob validation.
-- The next CI/image will use `polarisgmutest=1` only. It needs no firmware blob and must leave all GPU domains/GMU/SMMU/GX untouched. The expected result is a persistent `POLARIS GMUTEST` state line, or a bounded early stop; neither outcome claims acceleration.
+- The previous mode-1 image `out/ci-40181241335/mode1/shim-polaris-gmutest-mode1.img` was booted successfully; the current GCC readback is below. New mode 2 performs read-only GPUCC status after the GCC AHB gate, and stops after the single CX GDSCR read if CX reports off; it performs no firmware allocation and no writes. Mode 3 retains the TCM experiment. The upcoming mode-2 image needs no firmware blob. The expected result is a persistent `POLARIS GMUTEST` state line, or a bounded early stop; neither outcome claims acceleration.
 
 ## 2026-10-25 0096 CI failure fixed; 0096 regenerated
 
