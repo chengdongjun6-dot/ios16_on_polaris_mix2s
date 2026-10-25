@@ -230,7 +230,7 @@
 +    /* XO 19.2 MHz is an SDM845 GMU source. No PLL or voltage increase. */
 +    if ((old_cfg & PG_CFG_MASK) != 0) {
 +        cfg_changed = true;
-+        if (!pg_update_rcg(io, 0)) goto restore;
++        if (!pg_update_rcg(io, 1u /* BI_TCXO, divide-by-1 */)) goto restore;
 +    }
 +    if (!(old_cxo & 1u)) {
 +        cxo_changed = true;
