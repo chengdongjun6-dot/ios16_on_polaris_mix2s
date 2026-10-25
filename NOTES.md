@@ -7,7 +7,8 @@
 - Source rechecked: pinned MiCode `gpucc-sdm845.c:220-245,414-429,458-469,820-824`; freshly fetched `clk-rcg2.c:109-175,492-565`, `clk-branch.c:65-140`, and same-device Polaris 0138 sequence. Raw public copies are ignored in `out/gpu-route-sources-20261025`. Existing mode-3 helper does not have these extra clock safeguards and remains unreachable; do not enable it.
 - **GMU bus gate:** actual prior GCC MEMNOC/SNOC are off. Even after XO clocks become ready, mode 5 withholds CM3 read unless MEMNOC/SNOC/DDR AXI all show running; then it would read only SYSRESET. Expected on this phone is clock evidence with GMU read withheld, followed by full restoration. Do not claim reset verified when `clock probe restored (a=reset-verified)` has a=0.
 - Validation: **24 clock/CX fault scenarios** (actual C helper, WSL cc `-Wall -Wextra -Werror`) pass, plus previous **28 CX**, **14 TCM + six CX gates and bounds**, and four firmware parser tests. Patch apply against clean post-0095 base and whitespace checks pass. Log phases identify failed stages; new register/status values remain unobserved until phone test.
-- Next: commit/push and run one RELEASE/SWEET CI, inspect logs, verify artifact/hash, package mode 5 with the exact FT0095 wrapper/ADT/touch args and no firmware, save fresh baseline, temporary `fastboot boot`. Collect user screen observation and changed recovery ring; no destructive operation is authorized here.
+- Source committed/pushed as **d3151f4a07596c533c1beca0f8220b376bccc047**; RELEASE/SWEET CI **40192935142** started. Local packing/boot/capture scripts prepared under ignored out directories.
+- Next: inspect CI logs, verify artifact/hash, package mode 5 with the exact FT0095 wrapper/ADT/touch args and no firmware, save fresh baseline, temporary `fastboot boot`. Collect user screen observation and changed recovery ring; no destructive operation is authorized here.
 
 ## 2026-10-25 active: mode-4 CX on/off and timing restore proven on phone
 
