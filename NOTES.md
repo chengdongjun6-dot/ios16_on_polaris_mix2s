@@ -1,5 +1,10 @@
 # iOS 16 on sweet (Redmi Note 10 Pro, SM7150) - working notes
 
+## 2026-10-25 FT0095 baseline confirmed; GPU work authorized (active)
+
+- User confirms the exact original FT0095 temporary boot reached iOS and touch worked, then reports returning to recovery. This satisfies the boot/touch baseline prerequisite. User now explicitly asks to proceed with GPU acceleration to address stutter. Keep `shim-polaris-ft0095.img` SHA-256 `c42ece543ae55d3c9969f7b72fea4839f6cfb950c71e035f6a568c9925d83220` as the rollback boot image; do not resurrect the cancelled frame-rate experiment.
+- Confirmation is a user observation of boot/touch, not proof that PosterBoard never crashes, flicker is fixed, or GPU operates. Next GPU work must target actual A630v2 resource initialization and a measurable command completion before claiming acceleration. Recheck live device state; the user's recovery report alone does not establish ADB availability.
+
 ## 2026-10-25 restore known-working FT0095 baseline before GPU (active)
 
 - User explicitly prioritizes restoring boot with working touch, then GPU. Reused the exact original FT0095 scaled-display image from successful CI `40157852186`, which the user had confirmed reached iOS with FocalTech touch before native-geometry/quiet trials. No new build and no Apple binary or root configuration edits.
